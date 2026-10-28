@@ -1,0 +1,27 @@
+services:
+  roomrelay:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      ROOMRELAY_SESSION_SECRET: ${ROOMRELAY_SESSION_SECRET:-}
+      ROOMRELAY_CAMPUS_TIMEZONE: ${ROOMRELAY_CAMPUS_TIMEZONE:-Europe/London}
+      ROOMRELAY_DB_PATH: /app/data/room-relay.db
+    volumes:
+      - roomrelay-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  roomrelay-data:

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Production build
+build/
+dist/
+
+# Local environment and secrets
+.env
+.env.local
+.env.*.local
+
+# RoomRelay local database and SQLite sidecars
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Testing / tooling
+coverage/
+.vitest/
+*.tsbuildinfo
+
+# OS and editor artifacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Deployment providers
+.vercel/

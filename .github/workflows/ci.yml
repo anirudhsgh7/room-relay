@@ -1,0 +1,46 @@
+name: RoomRelay CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ROOMRELAY_SESSION_SECRET: ci-only-session-secret-roomrelay-0123456789abcdef
+      ROOMRELAY_DB_PATH: ./data/ci-room-relay.db
+      ROOMRELAY_CAMPUS_TIMEZONE: Europe/London
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize database and demo fixtures
+        run: npm run db:setup
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Production smoke test
+        run: npm run test:smoke
