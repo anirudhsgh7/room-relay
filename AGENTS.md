@@ -47,4 +47,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Deployment
 
-- No public preview credentials/URL are configured. README documents Vercel + Neon deployment and the optional Docker path; do not claim the app is publicly deployed unless verified.
+- Live production: https://room-relay.vercel.app (Vercel + Neon Postgres). Do not claim a different URL or environment is deployed unless verified.

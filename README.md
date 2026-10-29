@@ -42,7 +42,7 @@ This repository implements **Phase 6: operations and usability** on top of the c
 | Incident reporting, manager review, admin resolution | Complete |
 | Connected request-to-close-out lifecycle timeline | Complete |
 | Neon Postgres + Vercel deployment configuration | Complete |
-| Public preview deployment | Not provisioned — requires Vercel project and domain |
+| Public deployment | Live at https://room-relay.vercel.app |
 
 ### What is deliberately not included
 
@@ -427,6 +427,8 @@ The current suite contains 202 tests across 22 files, including allocation ranki
 ## Deployment
 
 This repository is configured for **Vercel + Neon Postgres**. Vercel hosts the Next.js app, Server Actions, and route handlers together; Neon supplies the database. There is no persistent container disk to manage.
+
+**Live production:** https://room-relay.vercel.app
 
 ### Neon setup
 

@@ -1,9 +1,33 @@
 export const DEFAULT_CAMPUS_TIMEZONE = "Europe/London";
 
+/**
+ * Reads an environment value and strips paired quotes. Some deployment
+ * providers preserve the quotes from a pasted value, which breaks URLs and
+ * secrets even though the value is otherwise correct.
+ */
+export function getEnvValue(name: string): string | undefined {
+  const raw = process.env[name];
+
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  const trimmed = raw.trim();
+
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
 export function getDatabaseUrl(): string {
   const configured =
-    process.env.DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL_UNPOOLED?.trim();
+    getEnvValue("DATABASE_URL") || getEnvValue("DATABASE_URL_UNPOOLED");
 
   if (!configured) {
     throw new Error(
@@ -16,7 +40,7 @@ export function getDatabaseUrl(): string {
 
 export function getCampusTimezone(): string {
   const timezone =
-    process.env.ROOMRELAY_CAMPUS_TIMEZONE?.trim() || DEFAULT_CAMPUS_TIMEZONE;
+    getEnvValue("ROOMRELAY_CAMPUS_TIMEZONE") || DEFAULT_CAMPUS_TIMEZONE;
 
   try {
     new Intl.DateTimeFormat("en-GB", { timeZone: timezone }).format();
@@ -30,7 +54,7 @@ export function getCampusTimezone(): string {
 }
 
 export function getSessionSecret(): Uint8Array {
-  const secret = process.env.ROOMRELAY_SESSION_SECRET?.trim();
+  const secret = getEnvValue("ROOMRELAY_SESSION_SECRET");
 
   if (!secret || secret.length < 32) {
     throw new Error(
@@ -46,12 +70,11 @@ export function validateRuntimeConfig(): {
   sessionSecretConfigured: boolean;
   campusTimezone: string;
 } {
-  const secret = process.env.ROOMRELAY_SESSION_SECRET?.trim();
+  const secret = getEnvValue("ROOMRELAY_SESSION_SECRET");
 
   return {
     databaseConfigured: Boolean(
-      process.env.DATABASE_URL?.trim() ||
-        process.env.DATABASE_URL_UNPOOLED?.trim(),
+      getEnvValue("DATABASE_URL") || getEnvValue("DATABASE_URL_UNPOOLED"),
     ),
     sessionSecretConfigured: Boolean(secret && secret.length >= 32),
     campusTimezone: getCampusTimezone(),

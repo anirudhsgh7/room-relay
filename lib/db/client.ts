@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getDatabaseUrl } from "@/lib/config";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 // Keep the existing JSON-shaped text fields intact rather than returning
@@ -190,19 +191,7 @@ function createPool(connectionString: string): Pool {
   return pool;
 }
 
-export function getDatabaseUrl(): string {
-  const connectionString =
-    process.env.DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL_UNPOOLED?.trim();
-
-  if (!connectionString) {
-    throw new Error(
-      "DATABASE_URL is required. Run `neon env pull` or set a Postgres connection string.",
-    );
-  }
-
-  return connectionString;
-}
+export { getDatabaseUrl };
 
 export function openDatabase(connectionString: string): RoomRelayDatabase {
   return new PostgresDatabase(createPool(connectionString));

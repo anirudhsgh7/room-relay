@@ -32,6 +32,7 @@ export async function GET() {
       },
     );
   } catch (error) {
+    console.error("RoomRelay health check failed:", error);
     const reason =
       error instanceof Error && error.message.includes("not initialized")
         ? "database_not_initialized"
