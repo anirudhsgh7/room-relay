@@ -14,8 +14,14 @@ import type {
   RoomSummary,
 } from "@/lib/rooms/types";
 import type { RoomSearchFilters } from "@/lib/rooms/search";
+import { listUpcomingBlackouts } from "@/lib/rooms/blackouts";
+import {
+  POLICY_SELECT_COLUMNS,
+  policyFromColumns,
+  type PolicyColumns,
+} from "@/lib/rooms/policy";
 
-interface RoomRow {
+interface RoomRow extends PolicyColumns {
   id: string;
   code: string;
   name: string;
@@ -25,11 +31,6 @@ interface RoomRow {
   facilities: string;
   policy_summary: string;
   status: string;
-  requests_enabled: number | null;
-  slot_interval_minutes: number | null;
-  minimum_notice_minutes: number | null;
-  maximum_duration_minutes: number | null;
-  buffer_minutes: number | null;
 }
 
 interface RequirementRow {
@@ -62,13 +63,7 @@ function parseStringArray(value: string): string[] {
 }
 
 function policyFromRow(row: RoomRow): RoomPolicy {
-  return {
-    requestsEnabled: row.requests_enabled === 1,
-    slotIntervalMinutes: row.slot_interval_minutes ?? 30,
-    minimumNoticeMinutes: row.minimum_notice_minutes ?? 30,
-    maximumDurationMinutes: row.maximum_duration_minutes ?? 240,
-    bufferMinutes: row.buffer_minutes ?? 0,
-  };
+  return policyFromColumns(row);
 }
 
 function availabilityFor(
@@ -76,11 +71,9 @@ function availabilityFor(
   row: RoomRow,
   interval: CampusInterval | null,
 ): RoomAvailabilityCode | null {
-  if (row.status !== "active") {
-    return "not_requestable";
-  }
+  const policy = policyFromRow(row);
 
-  if (row.requests_enabled !== 1) {
+  if (row.status !== "active" || !policy.requestsEnabled) {
     return "not_requestable";
   }
 
@@ -88,13 +81,10 @@ function availabilityFor(
     return null;
   }
 
-  const slot = row.slot_interval_minutes ?? 30;
-  const maximumDuration = row.maximum_duration_minutes ?? 240;
-
   if (
-    interval.startMinutes % slot !== 0 ||
-    interval.endMinutes % slot !== 0 ||
-    interval.durationMinutes > maximumDuration
+    interval.startMinutes % policy.slotIntervalMinutes !== 0 ||
+    interval.endMinutes % policy.slotIntervalMinutes !== 0 ||
+    interval.durationMinutes > policy.maximumDurationMinutes
   ) {
     return "invalid_time";
   }
@@ -102,7 +92,7 @@ function availabilityFor(
   return checkRoomAvailability(db, {
     roomId: row.id,
     interval,
-    bufferMinutes: row.buffer_minutes ?? 0,
+    bufferMinutes: policy.bufferMinutes,
   }).code;
 }
 
@@ -307,11 +297,7 @@ export function searchRooms(
       `SELECT
          r.id, r.code, r.name, r.building, r.location, r.capacity,
          r.facilities, r.policy_summary, r.status,
-         policy.requests_enabled,
-         policy.slot_interval_minutes,
-         policy.minimum_notice_minutes,
-         policy.maximum_duration_minutes,
-         policy.buffer_minutes
+         ${POLICY_SELECT_COLUMNS}
        FROM rooms r
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
        WHERE ${conditions.join(" AND ")}
@@ -357,11 +343,7 @@ export function getRoomDetail(
       `SELECT
          r.id, r.code, r.name, r.building, r.location, r.capacity,
          r.facilities, r.policy_summary, r.status,
-         policy.requests_enabled,
-         policy.slot_interval_minutes,
-         policy.minimum_notice_minutes,
-         policy.maximum_duration_minutes,
-         policy.buffer_minutes
+         ${POLICY_SELECT_COLUMNS}
        FROM rooms r
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
        WHERE r.code = ? COLLATE NOCASE
@@ -386,6 +368,7 @@ export function getRoomDetail(
   return {
     ...baseSummary(db, row, interval, requirements),
     requirements,
+    upcomingBlackouts: listUpcomingBlackouts(db, row.id),
     hours: hours.map<RoomHours>((rule) => ({
       weekday: rule.weekday,
       opensAt: rule.opens_at,

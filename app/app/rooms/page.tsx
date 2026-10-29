@@ -14,24 +14,28 @@ import {
 import type { RoomAvailabilityCode, RoomSummary } from "@/lib/rooms/types";
 
 export const metadata: Metadata = {
-  title: "Room discovery",
-  description: "Find an available campus room and submit a booking request.",
+  title: "Find a room",
+  description: "See which campus rooms are free and send a booking request.",
 };
 
-function availabilityChip(code: RoomAvailabilityCode | null) {
+function availabilityChip(code: RoomAvailabilityCode | null, waitlist: boolean) {
   switch (code) {
     case "available":
-      return <StatusChip tone="green">Available for request</StatusChip>;
+      return <StatusChip tone="green">Free</StatusChip>;
     case "conflict":
-      return <StatusChip tone="red">Booked at this time</StatusChip>;
+      return (
+        <StatusChip tone="red">{waitlist ? "Booked · waitlist open" : "Booked"}</StatusChip>
+      );
+    case "blackout":
+      return <StatusChip tone="red">Closed at this time</StatusChip>;
     case "outside_hours":
       return <StatusChip tone="amber">Outside room hours</StatusChip>;
     case "invalid_time":
-      return <StatusChip tone="amber">Check time rules</StatusChip>;
+      return <StatusChip tone="amber">Time doesn&apos;t fit the rules</StatusChip>;
     case "not_requestable":
       return <StatusChip tone="neutral">Not taking requests</StatusChip>;
     default:
-      return <StatusChip tone="neutral">View room</StatusChip>;
+      return null;
   }
 }
 
@@ -53,9 +57,7 @@ function RoomCard({
       <div className="flex flex-1 flex-col p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.13em] text-ink-600">
-              {room.code}
-            </p>
+            <p className="text-xs font-medium text-ink-600">{room.code}</p>
             <h2 className="mt-1.5 text-lg font-bold tracking-tight text-ink-950">
               <Link href={detailHref} className="hover:text-brand-700">
                 {room.name}
@@ -84,16 +86,16 @@ function RoomCard({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {availabilityChip(room.availability)}
+          {availabilityChip(room.availability, room.policy.waitlistEnabled)}
           <span className="chip border-ink-950/10 bg-sand-50 text-ink-700">
             {room.capacity} seats
           </span>
           {room.requiredRequirementCount > 0 ? (
             role === "student" ? (
               room.hasUnverifiedRequiredRequirement ? (
-                <StatusChip tone="amber">Eligibility review needed</StatusChip>
+                <StatusChip tone="amber">Has requirements</StatusChip>
               ) : (
-                <StatusChip tone="green">Requirements verified</StatusChip>
+                <StatusChip tone="green">Requirements done</StatusChip>
               )
             ) : (
               <StatusChip tone="neutral">
@@ -127,14 +129,18 @@ function RoomCard({
         <div className="mt-auto flex items-center justify-between gap-3 border-t border-sand-200 pt-4">
           <p className="text-[0.66rem] leading-4 text-ink-600">
             {room.availability === "available"
-              ? "Submit a request for manager review."
+              ? "Free. Send a request to the manager."
               : room.availability === "conflict"
-                ? "Choose another time or room."
-                : room.availability === "outside_hours"
-                  ? "Check the room hours before requesting."
-                  : room.availability === "invalid_time"
-                    ? "Use the room's time increment and duration rules."
-                    : "Open the room to see its rules."}
+                ? room.policy.waitlistEnabled
+                  ? "Booked. You can join the waitlist."
+                  : "Booked. Try another time."
+                : room.availability === "blackout"
+                  ? "Closed for planned work at this time."
+                  : room.availability === "outside_hours"
+                    ? "Closed at this time. See its hours."
+                    : room.availability === "invalid_time"
+                      ? `Times must be on the ${room.policy.slotIntervalMinutes}-minute mark, up to ${room.policy.maximumDurationMinutes / 60} h.`
+                      : ""}
           </p>
           <Link
             href={detailHref}
@@ -201,37 +207,22 @@ export default async function RoomsPage({
 
   return (
     <div className="space-y-7">
-      <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-        <div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Room discovery · Phase 2</p>
-            <StatusChip tone="green">Request workflow live</StatusChip>
-          </div>
-          <h1 className="mt-3 max-w-3xl font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-            Find the right room,
-            <span className="italic text-brand-700"> then make the ask.</span>
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700 sm:text-base sm:leading-7">
-            Filter the campus catalog, check room rules, and submit a request
-            for manager review. A request never grants access on its own.
-          </p>
-        </div>
-        {profile.role === "student" ? (
-          <Link href="/app/bookings" className="btn-secondary shrink-0">
-            My requests
-          </Link>
-        ) : null}
+      <section>
+        <h1 className="font-display text-4xl leading-[1.05] tracking-[-0.03em] text-ink-950 sm:text-5xl">
+          Find a room
+        </h1>
+        <p className="mt-3 max-w-2xl text-base leading-7 text-ink-700">
+          Choose a day and time to see what&apos;s free. Add a group size or
+          facilities to narrow it down.
+        </p>
       </section>
 
       <section className="surface p-4 sm:p-5" aria-labelledby="filters-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p id="filters-heading" className="text-sm font-bold text-ink-950">
-              Search the catalog
-            </p>
-            <p className="mt-1 text-xs text-ink-600">
-              Time filters check opening hours and confirmed bookings.
-            </p>
+            <h2 id="filters-heading" className="text-base font-bold text-ink-950">
+              When and what you need
+            </h2>
           </div>
           {parsed.ok && parsed.hasFilters ? (
             <Link
@@ -283,7 +274,7 @@ export default async function RoomsPage({
               id="start"
               name="start"
               type="time"
-              step="900"
+              step="300"
               defaultValue={values.startTime}
               className="field"
             />
@@ -299,7 +290,7 @@ export default async function RoomsPage({
               id="end"
               name="end"
               type="time"
-              step="900"
+              step="300"
               defaultValue={values.endTime}
               className="field"
             />
@@ -309,7 +300,7 @@ export default async function RoomsPage({
               htmlFor="capacity"
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
-              Minimum seats
+              People
             </label>
             <input
               id="capacity"
@@ -317,7 +308,7 @@ export default async function RoomsPage({
               type="number"
               min="1"
               inputMode="numeric"
-              placeholder="Any"
+              placeholder="Any number"
               defaultValue={values.minCapacity}
               className="field"
             />
@@ -369,21 +360,19 @@ export default async function RoomsPage({
 
           <div className="flex items-end lg:col-span-2">
             <button type="submit" className="btn-dark w-full">
-              Search rooms
+              Show rooms
             </button>
           </div>
         </form>
 
-        <p className="mt-3 text-[0.66rem] leading-4 text-ink-600">
-          Times are shown in the campus timezone. Requests must meet each
-          room&apos;s notice, duration, and opening-hour rules.
+        <p className="mt-3 text-xs leading-5 text-ink-600">
+          Times are campus time.
         </p>
       </section>
 
       <section aria-labelledby="results-heading">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="eyebrow">Campus catalog</p>
             <h2
               id="results-heading"
               className="mt-1.5 text-xl font-bold tracking-tight text-ink-950"
@@ -393,12 +382,12 @@ export default async function RoomsPage({
           </div>
           {parsed.ok && parsed.interval ? (
             <p className="text-xs text-ink-600">
-              {parsed.interval.dateLabel} · {parsed.interval.startLabel}–
-              {parsed.interval.endLabel} · {availableCount} available
+              {availableCount} free on {parsed.interval.dateLabel},{" "}
+              {parsed.interval.startLabel}–{parsed.interval.endLabel}
             </p>
           ) : (
             <p className="text-xs text-ink-600">
-              Add a date and time to check a specific slot.
+              Add a day and time to see which are free.
             </p>
           )}
         </div>

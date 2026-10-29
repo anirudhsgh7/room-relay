@@ -48,24 +48,22 @@ export default async function AccessPage() {
       <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Access policy · Phase 4</p>
-            <StatusChip tone="green">Simulated checks live</StatusChip>
+            <StatusChip tone="neutral">Simulated: no real door is opened</StatusChip>
           </div>
           <h1 className="mt-3 max-w-3xl font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-            Test the booking-to-door
-            <span className="italic text-brand-700"> decision boundary.</span>
+            {profile.role === "student" ? "Check in" : "Tap simulator"}
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700 sm:text-base sm:leading-7">
-            Choose one of your own credentials and a room. The server checks the
-            current booking, credential state, and exact time window before
-            returning an allow or deny decision.
+            {profile.role === "student"
+              ? "When you arrive for an approved booking, choose your card and the room, then tap. It works only inside your booked time."
+              : "Try a card tap as the reader would. Staff accounts have no bookings, so taps are refused; the attempt is still logged."}
           </p>
-          <p className="mt-3 inline-flex rounded-full border border-ink-950/10 bg-white px-3 py-1.5 font-mono text-[0.65rem] text-ink-700">
-            Server time {nowLabel} · {timezone}
+          <p className="mt-3 inline-flex rounded-full border border-ink-950/10 bg-white px-3 py-1.5 text-xs text-ink-700">
+            Campus time now: {nowLabel}
           </p>
         </div>
         <Link href="/app/access/history" className="btn-secondary shrink-0">
-          Access history
+          {profile.role === "student" ? "My taps" : "Access log"}
         </Link>
       </section>
 
@@ -73,12 +71,11 @@ export default async function AccessPage() {
         <section className="surface p-5 sm:p-6">
           <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-sm font-bold text-ink-950">
-                Simulated access check
-              </p>
-              <p className="mt-1 text-xs leading-5 text-ink-600">
-                The browser sends only a credential ID, room ID, and nonce. The
-                server owns the actor, time, policy, result, and event record.
+              <h2 className="text-base font-bold text-ink-950">
+                Tap your card
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-ink-600">
+                The first successful tap checks you in. Every tap is recorded.
               </p>
             </div>
             <StatusChip tone="neutral">Software only</StatusChip>
@@ -99,16 +96,15 @@ export default async function AccessPage() {
           <section className="relative overflow-hidden rounded-2xl bg-ink-950 p-5 text-white">
             <div className="grid-paper pointer-events-none absolute inset-0 opacity-70" />
             <div className="relative">
-              <p className="label text-brand-300">Trust boundary</p>
-              <h2 className="mt-3 font-display text-2xl leading-tight tracking-[-0.03em]">
-                The server decides.
+              <h2 className="font-display text-2xl leading-tight tracking-[-0.03em]">
+                When a tap works
               </h2>
               <ul className="mt-4 space-y-3">
                 {[
-                  "Credential must belong to your active account",
-                  "Booking must match you and the selected room",
-                  "Exact half-open window: start ≤ now < end",
-                  "Every attempt is append-only and role-scoped",
+                  "It's your own card, and it hasn't been cancelled",
+                  "You have an approved booking for this room",
+                  "It's between your booking's start and end time",
+                  "Every tap is recorded, allowed or not",
                 ].map((item) => (
                   <li
                     key={item}
@@ -120,12 +116,9 @@ export default async function AccessPage() {
                 ))}
               </ul>
               <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3">
-                <p className="text-[0.62rem] font-bold uppercase tracking-[0.14em] text-white/35">
-                  Not connected
-                </p>
-                <p className="mt-1.5 text-xs leading-5 text-white/55">
-                  No NFC reader, relay, or physical door is connected. This is a
-                  software policy simulation.
+                <p className="text-xs leading-5 text-white/60">
+                  No card reader or door lock is connected in this version. The
+                  check is simulated in software.
                 </p>
               </div>
             </div>

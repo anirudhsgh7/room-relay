@@ -233,21 +233,16 @@ export async function seedDatabase(
         @id, @code, @name, @building, @location, @capacity, @facilities,
         @policy_summary, @manager_id, @status, @now, @now
       )
-      ON CONFLICT(id) DO UPDATE SET
-        code = excluded.code,
-        name = excluded.name,
-        building = excluded.building,
-        location = excluded.location,
-        capacity = excluded.capacity,
-        facilities = excluded.facilities,
-        policy_summary = excluded.policy_summary,
-        manager_id = excluded.manager_id,
-        status = excluded.status,
-        updated_at = excluded.updated_at
+      ON CONFLICT(id) DO NOTHING
     `);
 
+    // Rooms, hours, requirements, and booking policies are administrator-owned
+    // once they exist. Seeding only creates them for rooms that are new in this
+    // run, so `npm start` (which re-runs setup) never overwrites admin edits.
+    const newlySeededRoomIds = new Set<string>();
+
     for (const room of seedRooms) {
-      upsertRoom.run({
+      const inserted = upsertRoom.run({
         id: room.id,
         code: room.code,
         name: room.name,
@@ -260,6 +255,10 @@ export async function seedDatabase(
         status: room.status,
         now: nowIso,
       });
+
+      if (inserted.changes === 1) {
+        newlySeededRoomIds.add(room.id);
+      }
     }
 
     const upsertAvailability = db.prepare(`
@@ -270,14 +269,7 @@ export async function seedDatabase(
         @id, @room_id, @weekday, @opens_at, @closes_at, @effective_from,
         NULL, 1, @now, @now
       )
-      ON CONFLICT(id) DO UPDATE SET
-        room_id = excluded.room_id,
-        weekday = excluded.weekday,
-        opens_at = excluded.opens_at,
-        closes_at = excluded.closes_at,
-        effective_from = excluded.effective_from,
-        active = excluded.active,
-        updated_at = excluded.updated_at
+      ON CONFLICT(id) DO NOTHING
     `);
 
     const roomHours = [
@@ -288,6 +280,10 @@ export async function seedDatabase(
     ];
 
     for (const hours of roomHours) {
+      if (!newlySeededRoomIds.has(hours.roomId)) {
+        continue;
+      }
+
       for (let weekday = 1; weekday <= 5; weekday += 1) {
         upsertAvailability.run({
           id: `${hours.roomId}_weekday_${weekday}`,
@@ -308,13 +304,7 @@ export async function seedDatabase(
       ) VALUES (
         @id, @room_id, @requirement_type, @description, @required, 1, @now, @now
       )
-      ON CONFLICT(id) DO UPDATE SET
-        room_id = excluded.room_id,
-        requirement_type = excluded.requirement_type,
-        description = excluded.description,
-        required = excluded.required,
-        active = excluded.active,
-        updated_at = excluded.updated_at
+      ON CONFLICT(id) DO NOTHING
     `);
 
     upsertRequirement.run({
@@ -344,13 +334,7 @@ export async function seedDatabase(
       ) VALUES (
         @room_id, @requests_enabled, 30, 30, @maximum_duration_minutes, 0, @now
       )
-      ON CONFLICT(room_id) DO UPDATE SET
-        requests_enabled = excluded.requests_enabled,
-        slot_interval_minutes = excluded.slot_interval_minutes,
-        minimum_notice_minutes = excluded.minimum_notice_minutes,
-        maximum_duration_minutes = excluded.maximum_duration_minutes,
-        buffer_minutes = excluded.buffer_minutes,
-        updated_at = excluded.updated_at
+      ON CONFLICT(room_id) DO NOTHING
     `);
 
     const roomPolicies = [
@@ -382,7 +366,9 @@ export async function seedDatabase(
     ] as const;
 
     for (const policy of roomPolicies) {
-      upsertPolicy.run({ ...policy, now: nowIso });
+      if (newlySeededRoomIds.has(policy.room_id)) {
+        upsertPolicy.run({ ...policy, now: nowIso });
+      }
     }
 
     const upsertProfileEligibility = db.prepare(`
@@ -659,7 +645,17 @@ export async function seedDatabase(
       },
     ]);
 
+    // SQLite runs BEFORE INSERT triggers even for rows that ON CONFLICT DO
+    // NOTHING would then skip. Once an administrator has changed a room (for
+    // example reassigned its manager), re-inserting a fixture would fail the
+    // decision-metadata trigger, so existing fixtures are skipped up front.
+    const bookingExists = db.prepare("SELECT 1 FROM bookings WHERE id = ?");
+
     for (const booking of bookings) {
+      if (bookingExists.get(booking.id)) {
+        continue;
+      }
+
       const isCancelled = booking.id === "booking_cancelled_library";
       const completed = booking.id === "booking_completed_seminar";
       const openIncident = booking.id === "booking_incident_open";

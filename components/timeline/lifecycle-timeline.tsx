@@ -27,14 +27,13 @@ export function LifecycleTimeline({
     <section className="surface p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="eyebrow">Lifecycle history</p>
-          <h2 className="mt-2 text-lg font-bold tracking-tight text-ink-950">
-            From request to close-out
+          <h2 className="text-lg font-bold tracking-tight text-ink-950">
+            Booking history
           </h2>
+          <p className="mt-1 text-sm text-ink-600">
+            Everything that happened, from request to check-out.
+          </p>
         </div>
-        <span className="font-mono text-[0.62rem] text-ink-600">
-          {timeline.entries.length} events
-        </span>
       </div>
 
       {timeline.entries.length > 0 ? (
@@ -76,7 +75,7 @@ export function LifecycleTimeline({
         </ol>
       ) : (
         <p className="mt-4 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-ink-600">
-          No lifecycle events are recorded yet.
+          Nothing has happened yet.
         </p>
       )}
     </section>

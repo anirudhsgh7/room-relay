@@ -1,9 +1,15 @@
+import type { AllocationRule } from "@/lib/rooms/policy";
+
 export interface RoomPolicy {
   requestsEnabled: boolean;
   slotIntervalMinutes: number;
   minimumNoticeMinutes: number;
   maximumDurationMinutes: number;
   bufferMinutes: number;
+  maxAdvanceDays: number;
+  maxActivePerRequester: number;
+  allocationRule: AllocationRule;
+  waitlistEnabled: boolean;
 }
 
 export interface RoomRequirement {
@@ -17,6 +23,7 @@ export interface RoomRequirement {
 export type RoomAvailabilityCode =
   | "available"
   | "conflict"
+  | "blackout"
   | "outside_hours"
   | "invalid_time"
   | "not_requestable";
@@ -40,6 +47,14 @@ export interface RoomDetail extends Omit<RoomSummary, "availability"> {
   availability: RoomAvailabilityCode | null;
   hours: RoomHours[];
   requirements: RoomRequirement[];
+  upcomingBlackouts: RoomBlackoutSummary[];
+}
+
+export interface RoomBlackoutSummary {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  reason: string;
 }
 
 export interface RoomHours {

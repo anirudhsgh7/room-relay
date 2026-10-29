@@ -98,7 +98,7 @@ input {
   }
 
   .label {
-    @apply text-[0.69rem] font-bold uppercase tracking-[0.18em];
+    @apply text-xs font-semibold;
   }
 
   .field {
@@ -106,11 +106,27 @@ input {
   }
 
   .eyebrow {
-    @apply text-[0.69rem] font-bold uppercase tracking-[0.18em] text-brand-700;
+    @apply text-sm font-semibold text-brand-700;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-sm font-semibold text-ink-900;
+  }
+
+  .field-help {
+    @apply mt-1.5 text-xs leading-5 text-ink-600;
+  }
+
+  .field-error {
+    @apply mt-1.5 text-xs leading-5 font-medium text-flag-red;
+  }
+
+  .toggle {
+    @apply relative inline-flex h-6 w-11 shrink-0 cursor-pointer appearance-none rounded-full bg-sand-300 transition before:absolute before:top-0.5 before:left-0.5 before:size-5 before:rounded-full before:bg-white before:shadow before:transition checked:bg-brand-600 checked:before:translate-x-5 focus-visible:outline-offset-2;
   }
 
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold;
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold;
   }
 
   .status-dot {

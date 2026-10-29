@@ -43,9 +43,7 @@ export async function cancelBookingAction(
   });
 
   if (result.ok) {
-    revalidatePath("/app/bookings");
-    revalidatePath(`/app/bookings/${result.receipt.bookingId}`);
-    revalidatePath("/app/rooms");
+    revalidatePath("/app", "layout");
     redirect(`/app/bookings/${result.receipt.bookingId}?cancelled=1`);
   }
 
@@ -55,7 +53,7 @@ export async function cancelBookingAction(
     case "not_cancellable":
     case "state_changed":
       return {
-        error: `${result.message} Current status: ${result.currentStatus}.`,
+        error: result.message,
       };
     case "service_error":
       return {

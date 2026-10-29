@@ -255,8 +255,8 @@ export default async function IncidentDetailPage({
           profile.role === "manager" &&
           !incident.canResolve ? (
             <p className="rounded-xl border border-sand-200 bg-sand-50 p-4 text-xs leading-5 text-ink-600">
-              Awaiting an authorized administrator to record the final
-              resolution. Managers cannot impose a sanction in Phase 5.
+              Waiting for an administrator to record the outcome. Managers
+              recommend; they don&apos;t decide sanctions.
             </p>
           ) : null}
         </div>

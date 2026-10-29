@@ -14,13 +14,25 @@ import {
   findPendingDuplicate,
   getAllBlockingBookings,
   getBlockingBookings,
+  intervalsConflict,
 } from "@/lib/rooms/availability";
+import {
+  findOverlappingBlackouts,
+  loadActiveBlackoutWindows,
+} from "@/lib/rooms/blackouts";
+import { recordAudit } from "@/lib/audit";
+import {
+  activeRoomManagerId,
+  createNotification,
+  reviewerLink,
+} from "@/lib/notifications/service";
 import { getRoomDetail } from "@/lib/rooms/queries";
 import type { RoomDetail } from "@/lib/rooms/types";
 import type { BookingStatus } from "@/lib/domain";
 import {
   addDaysToLocalDate,
   formatCampusDate,
+  formatCampusDateTime,
   formatCampusTimeRange,
   localDateWeekday,
   minutesToTime,
@@ -195,9 +207,15 @@ function buildAlternatives(
   }
 
   const blockers = getAllBlockingBookings(db, room.id);
+  const blackouts = loadActiveBlackoutWindows(
+    db,
+    room.id,
+    new Date().toISOString(),
+  );
   const alternatives: SafeAlternative[] = [];
   const nowWithNotice =
     Date.now() + room.policy.minimumNoticeMinutes * 60_000;
+  const horizon = Date.now() + room.policy.maxAdvanceDays * 24 * 60 * 60_000;
   const step = room.policy.slotIntervalMinutes;
   const duration = interval.durationMinutes;
 
@@ -249,22 +267,33 @@ function buildAlternatives(
 
       if (
         candidate.startEpochMs < nowWithNotice ||
+        candidate.startEpochMs > horizon ||
         candidate.startUtc === interval.startUtc ||
         !withinHours(room, date, weekday, startMinutes, endMinutes)
       ) {
         continue;
       }
 
-      const conflict = blockers.some((booking) => {
-        const existingStart = Date.parse(booking.startAt);
-        const existingEnd =
-          Date.parse(booking.endAt) + room.policy.bufferMinutes * 60_000;
+      const closed = blackouts.some(
+        (blackout) =>
+          blackout.startMs < candidate.endEpochMs &&
+          blackout.endMs > candidate.startEpochMs,
+      );
 
-        return (
-          existingStart < candidate.endEpochMs &&
-          existingEnd > candidate.startEpochMs
-        );
-      });
+      if (closed) {
+        continue;
+      }
+
+      const conflict = blockers.some((booking) =>
+        intervalsConflict(
+          {
+            startMs: Date.parse(booking.startAt),
+            endMs: Date.parse(booking.endAt),
+          },
+          { startMs: candidate.startEpochMs, endMs: candidate.endEpochMs },
+          room.policy.bufferMinutes,
+        ),
+      );
 
       if (conflict) {
         continue;
@@ -292,6 +321,7 @@ function roomReceipt(
   input: ReturnType<typeof bookingRequestSubmissionSchema.parse>,
   warnings: EligibilityWarning[],
   nowIso: string,
+  status: "pending" | "waitlisted",
 ): Extract<BookingResult, { ok: true }> {
   return {
     ok: true,
@@ -308,7 +338,7 @@ function roomReceipt(
       startAt: interval.startUtc,
       endAt: interval.endUtc,
       timeZone: interval.timeZone,
-      status: "pending",
+      status,
       decisionReason: null,
       createdAt: nowIso,
       eligibilityWarnings: warnings,
@@ -498,6 +528,20 @@ export function submitBookingRequest(
       }
 
       if (
+        interval.startEpochMs >
+        Date.now() + room.policy.maxAdvanceDays * 24 * 60 * 60_000
+      ) {
+        return {
+          ok: false,
+          kind: "validation",
+          message: "This date is too far ahead.",
+          fieldErrors: {
+            startDate: `This room takes requests up to ${room.policy.maxAdvanceDays} days ahead.`,
+          },
+        };
+      }
+
+      if (
         !checkRoomSchedule(
           db,
           room.id,
@@ -515,6 +559,22 @@ export function submitBookingRequest(
         };
       }
 
+      const [blackout] = findOverlappingBlackouts(
+        db,
+        room.id,
+        interval.startUtc,
+        interval.endUtc,
+      );
+
+      if (blackout) {
+        return {
+          ok: false,
+          kind: "blackout",
+          message: `The room is closed for part of this time: ${blackout.reason}`,
+          alternatives: buildAlternatives(db, room, interval),
+        };
+      }
+
       const conflict = getBlockingBookings(
         db,
         room.id,
@@ -522,14 +582,18 @@ export function submitBookingRequest(
         interval.endUtc,
         room.policy.bufferMinutes,
       );
+      const joiningWaitlist =
+        conflict.length > 0 && input.joinWaitlist && room.policy.waitlistEnabled;
 
-      if (conflict.length > 0) {
+      if (conflict.length > 0 && !joiningWaitlist) {
         return {
           ok: false,
           kind: "conflict",
-          message:
-            "This time conflicts with a confirmed room booking. Choose another time or room.",
+          message: room.policy.waitlistEnabled
+            ? "This time is already booked. You can join the waitlist, or choose another time or room."
+            : "This time is already booked. Choose another time or room.",
           alternatives: buildAlternatives(db, room, interval),
+          waitlistAvailable: room.policy.waitlistEnabled,
         };
       }
 
@@ -545,10 +609,39 @@ export function submitBookingRequest(
           ok: false,
           kind: "duplicate",
           message:
-            "You already have a pending request for this room and time.",
+            "You already have a request in review or on the waitlist for this room and time.",
           bookingId: duplicateBookingId,
         };
       }
+
+      if (room.policy.maxActivePerRequester > 0) {
+        const active = db
+          .prepare(
+            `SELECT count(*) AS count
+             FROM bookings
+             WHERE requester_id = ?
+               AND room_id = ?
+               AND status IN ('pending', 'waitlisted', 'approved', 'checked_in')
+               AND julianday(end_at) > julianday(?)`,
+          )
+          .get(freshProfile.id, room.id, new Date().toISOString()) as {
+          count: number;
+        };
+
+        if (active.count >= room.policy.maxActivePerRequester) {
+          return {
+            ok: false,
+            kind: "quota",
+            message: `You already have ${active.count} upcoming ${
+              active.count === 1 ? "request" : "requests"
+            } for this room, which is this room's limit per person. Cancel one or wait until one has finished.`,
+          };
+        }
+      }
+
+      const status: "pending" | "waitlisted" = joiningWaitlist
+        ? "waitlisted"
+        : "pending";
 
       const nowIso = new Date().toISOString();
       const bookingId = `booking_${randomUUID()}`;
@@ -575,12 +668,12 @@ export function submitBookingRequest(
           id, room_id, requester_id, purpose, group_name, expected_attendance,
           start_at, end_at, status, decision_reason, decided_by, decided_at,
           created_at, updated_at, submission_key, request_payload_hash,
-          eligibility_snapshot_json
+          eligibility_snapshot_json, waitlisted_at
         ) VALUES (
           @id, @room_id, @requester_id, @purpose, @group_name, @expected_attendance,
-          @start_at, @end_at, 'pending', NULL, NULL, NULL,
+          @start_at, @end_at, @status, NULL, NULL, NULL,
           @created_at, @updated_at, @submission_key, @request_payload_hash,
-          @eligibility_snapshot_json
+          @eligibility_snapshot_json, @waitlisted_at
         )
       `);
 
@@ -598,24 +691,23 @@ export function submitBookingRequest(
         submission_key: input.idempotencyKey,
         request_payload_hash: hash,
         eligibility_snapshot_json: JSON.stringify(snapshot),
+        status,
+        waitlisted_at: status === "waitlisted" ? nowIso : null,
       });
 
-      db.prepare(
-        `INSERT INTO audit_events (
-           id, actor_id, action, entity_type, entity_id, occurred_at,
-           summary, correlation_id, metadata_json
-         ) VALUES (
-           @id, @actor_id, 'booking.submitted', 'booking', @entity_id,
-           @occurred_at, @summary, @correlation_id, @metadata_json
-         )`,
-      ).run({
-        id: `audit_${randomUUID()}`,
-        actor_id: freshProfile.id,
-        entity_id: bookingId,
-        occurred_at: nowIso,
-        summary: `${freshProfile.displayName} submitted a pending request for ${room.name}.`,
-        correlation_id: `booking-submission:${correlationId}`,
-        metadata_json: JSON.stringify({
+      recordAudit(db, {
+        actorId: freshProfile.id,
+        action:
+          status === "waitlisted" ? "booking.waitlist_joined" : "booking.submitted",
+        entityType: "booking",
+        entityId: bookingId,
+        occurredAt: nowIso,
+        summary:
+          status === "waitlisted"
+            ? `${freshProfile.displayName} joined the waitlist for ${room.name}.`
+            : `${freshProfile.displayName} submitted a pending request for ${room.name}.`,
+        correlationId: `booking-submission:${correlationId}`,
+        metadata: {
           roomCode: room.code,
           startAt: interval.startUtc,
           endAt: interval.endUtc,
@@ -623,8 +715,30 @@ export function submitBookingRequest(
             (warning) => warning.requirementId,
           ),
           timeZone: interval.timeZone,
-        }),
+          waitlist: status === "waitlisted",
+        },
       });
+
+      if (status === "pending") {
+        const managerId = activeRoomManagerId(db, room.id);
+
+        if (managerId) {
+          createNotification(db, {
+            recipientId: managerId,
+            kind: "request_submitted",
+            title: `New request: ${room.name}`,
+            body: `${freshProfile.displayName} asked for ${formatCampusDateTime(
+              interval.startUtc,
+              interval.endUtc,
+            )} (${input.expectedAttendance} ${
+              input.expectedAttendance === 1 ? "person" : "people"
+            }).${warnings.length > 0 ? " Eligibility needs checking." : ""}`,
+            linkPath: reviewerLink(bookingId),
+            bookingId,
+            createdAt: nowIso,
+          });
+        }
+      }
 
       return roomReceipt(
         bookingId,
@@ -633,6 +747,7 @@ export function submitBookingRequest(
         input,
         warnings,
         nowIso,
+        status,
       );
     });
 

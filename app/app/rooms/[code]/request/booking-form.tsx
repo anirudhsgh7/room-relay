@@ -11,14 +11,16 @@ import type { RoomRequirement } from "@/lib/rooms/types";
 
 interface RequestFormProps {
   roomCode: string;
-  roomName: string;
   capacity: number;
+  slotMinutes: number;
+  ruleLabel: string;
   idempotencyKey: string;
   timeZone: string;
   defaults: {
     startDate: string;
     startTime: string;
     endTime: string;
+    expectedAttendance: string;
   };
   requirements: RoomRequirement[];
 }
@@ -84,8 +86,9 @@ function Alternatives({
 
 export function BookingRequestForm({
   roomCode,
-  roomName,
   capacity,
+  slotMinutes,
+  ruleLabel,
   idempotencyKey,
   timeZone,
   defaults,
@@ -96,6 +99,8 @@ export function BookingRequestForm({
     {},
   );
 
+  const value = (field: string, fallback: string) => state.values?.[field] ?? fallback;
+  const step = slotMinutes * 60;
   const unverified = requirements.filter(
     (requirement) => requirement.required && requirement.verification !== "verified",
   );
@@ -110,7 +115,7 @@ export function BookingRequestForm({
           role="alert"
           className="rounded-xl border border-flag-red/20 bg-flag-red-bg px-4 py-3 text-sm leading-5 text-flag-red"
         >
-          <p className="font-semibold">The request was not submitted.</p>
+          <p className="font-semibold">Not sent yet</p>
           <p className="mt-1">{state.error}</p>
           {state.alternatives ? (
             <Alternatives
@@ -118,12 +123,32 @@ export function BookingRequestForm({
               alternatives={state.alternatives}
             />
           ) : null}
+          {state.waitlistAvailable ? (
+            <div className="mt-4 rounded-xl border border-sand-200 bg-white p-4 text-ink-800">
+              <p className="text-sm font-bold text-ink-950">Want to wait for this time?</p>
+              <p className="mt-1 text-sm leading-6">
+                Join the waitlist and keep your details. If the booking holding
+                this time is cancelled, your request goes to the manager
+                automatically and you&apos;re notified. Places follow the
+                room&apos;s rule: {ruleLabel}.
+              </p>
+              <button
+                type="submit"
+                name="joinWaitlist"
+                value="on"
+                disabled={pending}
+                className="btn-dark mt-3"
+              >
+                Join the waitlist
+              </button>
+            </div>
+          ) : null}
           {state.duplicateId ? (
             <Link
               href={`/app/bookings/${state.duplicateId}`}
               className="mt-2 inline-flex font-semibold underline underline-offset-2"
             >
-              View your existing request
+              Open your existing request
             </Link>
           ) : null}
         </div>
@@ -131,25 +156,24 @@ export function BookingRequestForm({
 
       {unverified.length > 0 ? (
         <div className="rounded-xl border border-flag-amber/20 bg-flag-amber-bg px-4 py-3 text-sm leading-5 text-flag-amber">
-          <p className="font-semibold">Eligibility review will be required.</p>
+          <p className="font-semibold">This room has requirements you haven&apos;t met yet</p>
           <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs">
             {unverified.map((requirement) => (
               <li key={requirement.id}>{requirement.description}</li>
             ))}
           </ul>
           <p className="mt-2 text-xs">
-            You may submit this request. It will remain pending while a manager
-            reviews eligibility.
+            You can still send the request. The manager checks before approving,
+            and requests that already meet them are ranked first.
           </p>
         </div>
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="sm:col-span-3">
-          <h2 className="text-sm font-bold text-ink-950">Requested time</h2>
-          <p className="mt-1 text-xs text-ink-600">
-            Times are campus-local ({timeZone}) and must be on the room&apos;s
-            booking boundaries.
+          <h2 className="text-base font-bold text-ink-950">When</h2>
+          <p className="mt-1 text-sm text-ink-600">
+            Campus time ({timeZone}). Start and end on the {slotMinutes}-minute mark.
           </p>
         </div>
 
@@ -165,7 +189,7 @@ export function BookingRequestForm({
             name="startDate"
             type="date"
             required
-            defaultValue={defaults.startDate}
+            defaultValue={value("startDate", defaults.startDate)}
             className="field"
             aria-invalid={Boolean(state.fieldErrors?.startDate)}
             aria-describedby={
@@ -189,9 +213,9 @@ export function BookingRequestForm({
             id="startTime"
             name="startTime"
             type="time"
-            step="900"
+            step={step}
             required
-            defaultValue={defaults.startTime}
+            defaultValue={value("startTime", defaults.startTime)}
             className="field"
             aria-invalid={Boolean(state.fieldErrors?.startTime)}
             aria-describedby={
@@ -215,9 +239,9 @@ export function BookingRequestForm({
             id="endTime"
             name="endTime"
             type="time"
-            step="900"
+            step={step}
             required
-            defaultValue={defaults.endTime}
+            defaultValue={value("endTime", defaults.endTime)}
             className="field"
             aria-invalid={Boolean(state.fieldErrors?.endTime)}
             aria-describedby={
@@ -232,14 +256,14 @@ export function BookingRequestForm({
       </div>
 
       <div className="border-t border-sand-200 pt-5">
-        <h2 className="text-sm font-bold text-ink-950">About the booking</h2>
+        <h2 className="text-base font-bold text-ink-950">What it&apos;s for</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label
               htmlFor="purpose"
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
-              Purpose
+              What will you use the room for?
             </label>
             <textarea
               id="purpose"
@@ -248,7 +272,8 @@ export function BookingRequestForm({
               minLength={10}
               maxLength={500}
               rows={3}
-              placeholder={`What will you use ${roomName} for?`}
+              defaultValue={value("purpose", "")}
+              placeholder={`e.g. Weekly planning meeting for the Robotics Club`}
               className="field h-auto min-h-24 resize-y py-3"
               aria-invalid={Boolean(state.fieldErrors?.purpose)}
               aria-describedby={
@@ -256,7 +281,7 @@ export function BookingRequestForm({
               }
             />
             <p id="purpose-help" className="mt-1.5 text-xs text-ink-600">
-              Include enough context for the room manager to review the request.
+              A sentence or two is enough for the manager to decide.
             </p>
             <FieldError id="purpose-error" message={state.fieldErrors?.purpose} />
           </div>
@@ -273,6 +298,7 @@ export function BookingRequestForm({
               name="groupName"
               type="text"
               maxLength={80}
+              defaultValue={value("groupName", "")}
               placeholder="e.g. Robotics Club"
               className="field"
               aria-invalid={Boolean(state.fieldErrors?.groupName)}
@@ -288,7 +314,7 @@ export function BookingRequestForm({
               htmlFor="expectedAttendance"
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
-              Expected attendance
+              How many people?
             </label>
             <input
               id="expectedAttendance"
@@ -298,7 +324,7 @@ export function BookingRequestForm({
               max={capacity}
               inputMode="numeric"
               required
-              defaultValue={Math.min(2, capacity)}
+              defaultValue={value("expectedAttendance", defaults.expectedAttendance)}
               className="field"
               aria-invalid={Boolean(state.fieldErrors?.expectedAttendance)}
               aria-describedby={
@@ -323,6 +349,7 @@ export function BookingRequestForm({
           type="checkbox"
           name="acknowledgement"
           required
+          defaultChecked={state.values?.acknowledgement === "on"}
           className="mt-0.5 size-4 shrink-0 accent-teal-700"
           aria-invalid={Boolean(state.fieldErrors?.acknowledgement)}
           aria-describedby={
@@ -330,8 +357,8 @@ export function BookingRequestForm({
           }
         />
         <span className="text-xs leading-5 text-ink-700">
-          I understand this is a pending request for manager review. It is{" "}
-          <strong>not permission to enter</strong> the room.
+          I understand this is a request. The room is only mine once the
+          manager <strong>approves</strong> it.
           {state.fieldErrors?.acknowledgement ? (
             <span
               id="acknowledgement-error"
@@ -357,11 +384,11 @@ export function BookingRequestForm({
                 className="size-4 animate-spin rounded-full border-2 border-ink-950/25 border-t-ink-950"
                 aria-hidden="true"
               />
-              Submitting request…
+              Sending…
             </>
           ) : (
             <>
-              Submit request
+              Send request
               <svg
                 viewBox="0 0 16 16"
                 fill="none"

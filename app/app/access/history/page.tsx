@@ -48,7 +48,6 @@ export default async function AccessHistoryPage({
       <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Access history · Phase 4</p>
             <StatusChip tone="neutral">
               {isAdmin
                 ? "Institution-wide"
@@ -59,10 +58,10 @@ export default async function AccessHistoryPage({
           </div>
           <h1 className="mt-3 font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
             {isAdmin
-              ? "Institution access log."
+              ? "Access log"
               : isStudent
-                ? "Your access attempts."
-                : "Room access activity."}
+                ? "My taps"
+                : "Access log"}
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700">
             {isStudent

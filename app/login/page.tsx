@@ -68,33 +68,21 @@ export default async function LoginPage({
 
       <main className="mx-auto grid max-w-7xl gap-8 px-5 pb-14 pt-4 sm:px-8 lg:grid-cols-[0.92fr_1.08fr] lg:gap-12 lg:px-10 lg:pb-20 lg:pt-8">
         <section className="lg:pt-12">
-          <div className="mb-6 flex flex-wrap items-center gap-3">
-            <span className="chip border-ink-950/10 bg-white text-ink-700">
-              <span className="size-1.5 rounded-full bg-brand-500" />
-              Lifecycle demo
-            </span>
-            <span className="font-mono text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-ink-600">
-              Phase 05 / Close-out
-            </span>
-          </div>
-
           <h1 className="font-display text-5xl leading-[0.98] tracking-[-0.045em] text-ink-950 sm:text-6xl">
-            Pick up where
-            <span className="block italic text-brand-700">trust begins.</span>
+            Sign in to RoomRelay
           </h1>
 
           <p className="mt-5 max-w-lg text-sm leading-6 text-ink-700 sm:text-base sm:leading-7">
-            Sign in to run the complete booking lifecycle: discovery, manager
-            decisions, simulated access, check-out, and human-reviewed
-            incidents.
+            This is a demo. Use one of the listed accounts to see RoomRelay as
+            a student, a room manager, or an administrator.
           </p>
 
           <div className="surface mt-8 max-w-lg p-5 sm:p-6">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-bold text-ink-950">Welcome back</p>
+                <p className="text-sm font-bold text-ink-950">Email and password</p>
                 <p className="mt-1 text-xs text-ink-600">
-                  Demo credentials are listed alongside each account.
+                  Or use one of the demo accounts to sign in with one click.
                 </p>
               </div>
               <span className="inline-flex size-9 items-center justify-center rounded-full bg-brand-50 text-brand-700">
@@ -140,20 +128,19 @@ export default async function LoginPage({
           <div className="relative">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="label text-brand-300">Demo directory</p>
-                <h2 className="mt-2 font-display text-3xl tracking-[-0.03em]">
-                  Four roles. One trust model.
+                <h2 className="font-display text-3xl tracking-[-0.03em]">
+                  Demo accounts
                 </h2>
               </div>
               <BrandMark tone="dark" size="sm" />
             </div>
             <p className="mt-3 max-w-xl text-sm leading-6 text-white/55">
-              These accounts are public test fixtures. They must never be reused
-              for a real deployment.
+              Each person sees only what their role allows. These passwords are
+              public, so never reuse them on a real system.
             </p>
 
             <div className="mt-6 grid gap-3">
-              {demoAccounts.map((account, index) => (
+              {demoAccounts.map((account) => (
                 <article
                   key={account.id}
                   className="rounded-2xl border border-white/10 bg-white/[0.055] p-4 transition hover:border-white/20 hover:bg-white/[0.075]"
@@ -161,16 +148,13 @@ export default async function LoginPage({
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-[0.63rem] text-white/35">
-                          0{index + 1}
-                        </span>
                         <h3 className="text-sm font-bold">{account.displayName}</h3>
                         <RoleBadge role={account.role} compact />
                       </div>
                       <p className="mt-1.5 text-xs leading-5 text-white/50">
                         {account.description}
                       </p>
-                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 font-mono text-[0.68rem]">
+                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
                         <span className="text-white/65">{account.email}</span>
                         <span className="text-brand-300">{account.password}</span>
                       </div>
@@ -189,7 +173,7 @@ export default async function LoginPage({
                         className="btn w-full min-h-9 border border-white/15 px-3.5 py-1.5 text-xs text-white hover:border-brand-300/40 hover:bg-brand-300/10 sm:w-auto"
                         aria-label={`Sign in as ${account.displayName}, ${account.role}`}
                       >
-                        Use account
+                        Sign in
                         <svg
                           viewBox="0 0 16 16"
                           fill="none"

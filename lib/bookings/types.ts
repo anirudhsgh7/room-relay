@@ -47,7 +47,15 @@ export type BookingResult =
     }
   | {
       ok: false;
-      kind: "conflict" | "outside_hours";
+      kind: "conflict";
+      message: string;
+      alternatives: SafeAlternative[];
+      /** True when the requester may join this room's waitlist instead. */
+      waitlistAvailable: boolean;
+    }
+  | {
+      ok: false;
+      kind: "outside_hours" | "blackout";
       message: string;
       alternatives: SafeAlternative[];
     }
@@ -59,7 +67,12 @@ export type BookingResult =
     }
   | {
       ok: false;
-      kind: "unavailable" | "forbidden" | "rate_limited" | "idempotency_mismatch";
+      kind:
+        | "unavailable"
+        | "forbidden"
+        | "rate_limited"
+        | "idempotency_mismatch"
+        | "quota";
       message: string;
       retryAfterSeconds?: number;
     }

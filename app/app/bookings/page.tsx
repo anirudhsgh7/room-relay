@@ -9,7 +9,7 @@ import { getDatabase } from "@/lib/db/client";
 import { formatCampusDateTime } from "@/lib/time/campus-time";
 
 export const metadata: Metadata = {
-  title: "My requests",
+  title: "My bookings",
   description: "View your RoomRelay room requests and their current status.",
 };
 
@@ -30,56 +30,42 @@ export default async function MyBookingsPage() {
     <div className="space-y-6">
       <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Requester workspace</p>
-            <StatusChip tone="neutral">Private to you</StatusChip>
-          </div>
-          <h1 className="mt-3 font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-            My requests
+          <h1 className="font-display text-4xl leading-[1.05] tracking-[-0.03em] text-ink-950 sm:text-5xl">
+            My bookings
           </h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-700">
-            Track every request you have submitted. Pending is not permission to
-            enter; a room manager still needs to review it.
+          <p className="mt-3 max-w-2xl text-base leading-7 text-ink-700">
+            Everything you&apos;ve asked for, upcoming first. Open one to see
+            the decision, cancel, or check out.
           </p>
         </div>
         <Link href="/app/rooms" className="btn-primary shrink-0">
-          Find another room
+          Find a room
         </Link>
-      </section>
-
-      <section className="rounded-2xl border border-flag-amber/20 bg-flag-amber-bg p-4 text-sm leading-6 text-flag-amber">
-        <p className="font-bold">Pending requests do not reserve a room.</p>
-        <p className="mt-1 text-xs leading-5">
-          Wait for a manager decision before treating any booking as approved.
-          Approved means the room/time is allocated; physical access is a later
-          phase.
-        </p>
       </section>
 
       <section aria-labelledby="request-list-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="eyebrow">Your history</p>
             <h2
               id="request-list-heading"
               className="mt-1.5 text-xl font-bold tracking-tight text-ink-950"
             >
-              {bookings.length} {bookings.length === 1 ? "request" : "requests"}
+              {bookings.length} {bookings.length === 1 ? "booking or request" : "bookings and requests"}
             </h2>
           </div>
           {pendingCount > 0 ? (
             <StatusChip tone="amber">
-              {pendingCount} awaiting manager review
+              {pendingCount} waiting for a decision
             </StatusChip>
           ) : null}
         </div>
 
         {bookings.length > 0 ? (
           <div className="surface mt-4 overflow-hidden">
-            <div className="hidden grid-cols-[1.3fr_1fr_0.8fr_0.7fr] gap-4 border-b border-sand-200 bg-sand-50 px-5 py-3 text-[0.62rem] font-bold uppercase tracking-[0.13em] text-ink-600 lg:grid">
+            <div className="hidden grid-cols-[1.3fr_1fr_0.8fr_0.7fr] gap-4 border-b border-sand-200 bg-sand-50 px-5 py-3 text-xs font-semibold text-ink-600 lg:grid">
               <span>Room</span>
-              <span>Campus time</span>
-              <span>Purpose</span>
+              <span>When</span>
+              <span>What for</span>
               <span>Status</span>
             </div>
             <ul className="divide-y divide-sand-200">
@@ -106,7 +92,7 @@ export default async function MyBookingsPage() {
                         )}
                       </p>
                       <p className="mt-0.5 text-[0.65rem] text-ink-600">
-                        {booking.expectedAttendance} attending
+                        {booking.expectedAttendance} people
                       </p>
                     </div>
                     <div className="min-w-0">
@@ -122,7 +108,7 @@ export default async function MyBookingsPage() {
                       (booking.status === "approved" ||
                         booking.status === "rejected") ? (
                         <p className="mt-1 line-clamp-1 text-[0.62rem] text-ink-600">
-                          Decision: {booking.decisionReason}
+                          Manager: {booking.decisionReason}
                         </p>
                       ) : null}
                       {booking.cancellationReason ? (
@@ -135,7 +121,7 @@ export default async function MyBookingsPage() {
                       <BookingStatusChip status={booking.status} />
                       {booking.eligibilityWarnings.length > 0 &&
                       booking.status === "pending" ? (
-                        <StatusChip tone="amber">Eligibility review</StatusChip>
+                        <StatusChip tone="amber">Requirements to check</StatusChip>
                       ) : null}
                       <svg
                         viewBox="0 0 16 16"
@@ -176,22 +162,21 @@ export default async function MyBookingsPage() {
               </svg>
             </span>
             <h3 className="mt-4 text-base font-bold text-ink-950">
-              No requests yet.
+              Nothing booked yet
             </h3>
             <p className="mt-2 max-w-sm text-sm leading-6 text-ink-600">
-              Find a room that fits your group, then submit a request for manager
-              review.
+              Find a room that fits your group and send a request. It shows up
+              here with its status.
             </p>
             <Link href="/app/rooms" className="btn-primary mt-5">
-              Discover rooms
+              Find a room
             </Link>
           </div>
         )}
       </section>
 
-      <p className="text-center text-[0.65rem] leading-5 text-ink-600/80">
-        Showing only requests linked to {profile.displayName}. Times are shown in{" "}
-        {timezone}.
+      <p className="text-center text-xs leading-5 text-ink-600">
+        Times are campus time ({timezone}).
       </p>
     </div>
   );

@@ -7,7 +7,14 @@ import type { BookingStatus } from "@/lib/domain";
 import { getBlockingBookings, checkRoomSchedule } from "@/lib/rooms/availability";
 import { getRoomDetail } from "@/lib/rooms/queries";
 import type { RoomRequirement } from "@/lib/rooms/types";
-import { localIntervalParts } from "@/lib/time/campus-time";
+import { formatCampusDateTime, localIntervalParts } from "@/lib/time/campus-time";
+import { getReviewStanding, settleConflictsAfterApproval } from "@/lib/bookings/waitlist";
+import { findOverlappingBlackouts } from "@/lib/rooms/blackouts";
+import {
+  createNotification,
+  requesterLink,
+} from "@/lib/notifications/service";
+import { ALLOCATION_RULE_COPY } from "@/lib/rooms/policy";
 
 type DecisionAction = "approve" | "reject";
 
@@ -17,18 +24,28 @@ interface DecisionInput {
   decisionReason: string;
   overrideRequirementIds: string[];
   overrideReason: string;
+  allocationExceptionReason?: string;
 }
 
 export interface DecisionFieldErrors {
   decisionReason?: string;
   overrideReason?: string;
   overrideRequirementIds?: string;
+  allocationExceptionReason?: string;
+}
+
+export interface OutrankingRequest {
+  id: string;
+  requesterName: string;
+  timeLabel: string;
+  comparison: string;
 }
 
 interface DecisionBookingRow {
   id: string;
   room_id: string;
   room_code: string;
+  room_name: string;
   manager_id: string;
   requester_id: string;
   start_at: string;
@@ -42,6 +59,8 @@ export interface DecisionReceipt {
   status: "approved" | "rejected";
   decidedAt: string;
   decisionReason: string;
+  waitlistedCount: number;
+  declinedCount: number;
 }
 
 export interface SafeRequirement {
@@ -76,6 +95,13 @@ export type DecisionResult =
     }
   | {
       ok: false;
+      kind: "allocation_order";
+      message: string;
+      outranking: OutrankingRequest[];
+      ruleLabel: string;
+    }
+  | {
+      ok: false;
       kind: "conflict" | "room_unavailable";
       message: string;
     }
@@ -103,6 +129,11 @@ const decisionSchema = z.object({
     .trim()
     .max(500, "Keep the override reason under 500 characters.")
     .default(""),
+  allocationExceptionReason: z
+    .string()
+    .trim()
+    .max(500, "Keep the explanation under 500 characters.")
+    .default(""),
 });
 
 function fieldErrors(error: z.ZodError): DecisionFieldErrors {
@@ -113,7 +144,8 @@ function fieldErrors(error: z.ZodError): DecisionFieldErrors {
     if (
       field === "decisionReason" ||
       field === "overrideReason" ||
-      field === "overrideRequirementIds"
+      field === "overrideRequirementIds" ||
+      field === "allocationExceptionReason"
     ) {
       if (!result[field]) {
         result[field] = issue.message;
@@ -133,7 +165,7 @@ function loadDecisionBooking(
       `SELECT
          b.id, b.room_id, b.requester_id, b.start_at, b.end_at,
          b.expected_attendance, b.status,
-         r.code AS room_code, r.manager_id
+         r.code AS room_code, r.name AS room_name, r.manager_id
        FROM bookings b
        JOIN rooms r ON r.id = b.room_id
        WHERE b.id = ?`,
@@ -276,19 +308,26 @@ export function decideBooking(
         };
       }
 
-      if (booking.status !== "pending") {
+      const request = parsed.data;
+      const decidable =
+        booking.status === "pending" ||
+        (request.action === "reject" && booking.status === "waitlisted");
+
+      if (!decidable) {
         return {
           ok: false,
           kind: "already_decided",
-          message: "This request has already been updated.",
+          message:
+            booking.status === "waitlisted"
+              ? "This request is on the waitlist. It returns to review automatically if the time frees up; until then it can only be declined."
+              : "This request has already been updated.",
           currentStatus: booking.status,
         };
       }
 
-      const request = parsed.data;
-
       if (request.action === "reject") {
         const nowIso = new Date().toISOString();
+        const priorStatus = booking.status;
         const update = db
           .prepare(
             `UPDATE bookings
@@ -300,7 +339,7 @@ export function decideBooking(
                  eligibility_override_requirement_ids_json = NULL,
                  updated_at = @updated_at
              WHERE id = @id
-               AND status = 'pending'`,
+               AND status = @prior_status`,
           )
           .run({
             id: booking.id,
@@ -308,6 +347,7 @@ export function decideBooking(
             decided_by: freshActor.id,
             decided_at: nowIso,
             updated_at: nowIso,
+            prior_status: priorStatus,
           });
 
         if (update.changes !== 1) {
@@ -329,7 +369,21 @@ export function decideBooking(
           metadata: {
             reason: request.decisionReason,
             roomCode: booking.room_code,
+            priorStatus,
           },
+        });
+
+        createNotification(db, {
+          recipientId: booking.requester_id,
+          kind: "decision_rejected",
+          title: `Request not approved: ${booking.room_name}`,
+          body: `Your request for ${formatCampusDateTime(
+            booking.start_at,
+            booking.end_at,
+          )} was not approved. Reason: ${request.decisionReason}`,
+          linkPath: requesterLink(booking.id),
+          bookingId: booking.id,
+          createdAt: nowIso,
         });
 
         return {
@@ -340,6 +394,8 @@ export function decideBooking(
             status: "rejected",
             decidedAt: nowIso,
             decisionReason: request.decisionReason,
+            waitlistedCount: 0,
+            declinedCount: 0,
           },
         };
       }
@@ -485,6 +541,46 @@ export function decideBooking(
           ? outstanding.map((requirement) => requirement.id)
           : [];
 
+      const [blackout] = findOverlappingBlackouts(
+        db,
+        room.id,
+        booking.start_at,
+        booking.end_at,
+      );
+
+      if (blackout) {
+        return {
+          ok: false,
+          kind: "room_unavailable",
+          message: `The room is closed for part of this time (${blackout.reason}). The request can only be declined.`,
+        };
+      }
+
+      const standing = getReviewStanding(db, booking.id);
+      const outranking = standing?.ahead ?? [];
+      const exceptionReason = data.allocationExceptionReason;
+
+      if (outranking.length > 0 && exceptionReason.length < 20) {
+        return {
+          ok: false,
+          kind: "allocation_order",
+          message:
+            outranking.length === 1
+              ? "Another request for this time ranks ahead of this one under the room's published rule. Approve that one instead, or explain why this request should go first."
+              : `${outranking.length} requests for this time rank ahead of this one under the room's published rule. Approve the first in line instead, or explain why this request should go first.`,
+          outranking: outranking.map((item) => ({
+            id: item.id,
+            requesterName: item.requesterName,
+            timeLabel: formatCampusDateTime(item.startAt, item.endAt),
+            comparison: item.comparison,
+          })),
+          ruleLabel: ALLOCATION_RULE_COPY[room.policy.allocationRule].label,
+        };
+      }
+
+      const allocationException =
+        outranking.length > 0 ? exceptionReason : null;
+
       const conflict = getBlockingBookings(
         db,
         room.id,
@@ -512,6 +608,7 @@ export function decideBooking(
                decided_at = @decided_at,
                eligibility_override_reason = @override_reason,
                eligibility_override_requirement_ids_json = @override_ids,
+               allocation_exception_reason = @allocation_exception,
                updated_at = @updated_at
            WHERE id = @id
              AND status = 'pending'`,
@@ -524,6 +621,7 @@ export function decideBooking(
           override_reason: overrideReason,
           override_ids:
             overrideIds.length > 0 ? JSON.stringify(overrideIds) : null,
+          allocation_exception: allocationException,
           updated_at: nowIso,
         });
 
@@ -555,7 +653,41 @@ export function decideBooking(
                   reason: overrideReason,
                 }
               : null,
+          allocation: {
+            rule: room.policy.allocationRule,
+            position: standing?.position ?? 1,
+            competing: standing ? standing.total - 1 : 0,
+            exceptionReason: allocationException,
+            outrankedBy: outranking.map((item) => item.id),
+          },
         },
+      });
+
+      createNotification(db, {
+        recipientId: booking.requester_id,
+        kind: "decision_approved",
+        title: `Approved: ${room.name}`,
+        body: `Your booking for ${formatCampusDateTime(
+          booking.start_at,
+          booking.end_at,
+        )} is confirmed. When you arrive, use Check in. Note from the manager: ${data.decisionReason}`,
+        linkPath: requesterLink(booking.id),
+        bookingId: booking.id,
+        createdAt: nowIso,
+      });
+
+      const settled = settleConflictsAfterApproval(db, {
+        booking: {
+          id: booking.id,
+          roomId: room.id,
+          roomName: room.name,
+          startAt: booking.start_at,
+          endAt: booking.end_at,
+        },
+        policy: room.policy,
+        actor: freshActor,
+        nowIso,
+        correlationId,
       });
 
       return {
@@ -566,6 +698,8 @@ export function decideBooking(
           status: "approved",
           decidedAt: nowIso,
           decisionReason: data.decisionReason,
+          waitlistedCount: settled.waitlistedIds.length,
+          declinedCount: settled.declinedIds.length,
         },
       };
     });
@@ -573,6 +707,15 @@ export function decideBooking(
     return execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
+
+    if (message.includes("ROOM_BLACKOUT")) {
+      return {
+        ok: false,
+        kind: "room_unavailable",
+        message:
+          "The room is closed for part of this time. No decision was saved.",
+      };
+    }
 
     if (message.includes("CONFIRMED_BOOKING_OVERLAP")) {
       return {

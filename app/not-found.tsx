@@ -8,17 +8,16 @@ export default function NotFound() {
         <div className="mb-6 flex justify-center">
           <BrandMark size="lg" tone="dark" />
         </div>
-        <p className="eyebrow">404 · Not in this build</p>
+        <p className="eyebrow">Page not found</p>
         <h1 className="mt-3 font-display text-4xl leading-tight tracking-[-0.04em] text-ink-950">
-          That room is not on the map.
+          We couldn&apos;t find that page.
         </h1>
         <p className="mt-4 text-sm leading-6 text-ink-600">
-          The page may belong to a later RoomRelay build phase, or the address
-          may be incorrect.
+          The link may be out of date, or you may not have access to it.
         </p>
         <div className="mt-7 flex flex-col justify-center gap-2 sm:flex-row">
           <Link href="/app" className="btn-dark">
-            Return to workspace
+            Go to your home
           </Link>
           <Link href="/" className="btn-secondary">
             Go home

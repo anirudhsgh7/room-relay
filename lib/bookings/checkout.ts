@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { promoteWaitlist } from "@/lib/bookings/waitlist";
+import {
+  activeRoomManagerId,
+  createNotification,
+} from "@/lib/notifications/service";
 import { z } from "zod";
 import { getProfileById, type UserProfile } from "@/lib/auth/service";
 import type { RoomRelayDatabase } from "@/lib/db/client";
@@ -348,6 +353,36 @@ export function checkOutBooking(
             conditionReportId: reportId,
           }),
         );
+      }
+
+      if (issueFound && incidentId) {
+        const managerId = activeRoomManagerId(db, booking.room_id);
+
+        if (managerId) {
+          createNotification(db, {
+            recipientId: managerId,
+            kind: "incident_update",
+            title: `Issue reported: ${booking.room_name}`,
+            body: `${freshActor.displayName} checked out and reported a ${categoryLabel(
+              data.incidentCategory ?? "other",
+            ).toLowerCase()} issue. It needs your review.`,
+            linkPath: `/app/incidents/${incidentId}`,
+            bookingId: booking.id,
+            createdAt: nowIso,
+          });
+        }
+      }
+
+      // Leaving early frees the rest of the slot for anyone waitlisted.
+      if (Date.parse(booking.end_at) > Date.parse(nowIso)) {
+        promoteWaitlist(db, {
+          roomId: booking.room_id,
+          freedStartAt: nowIso,
+          freedEndAt: booking.end_at,
+          nowIso,
+          correlationId,
+          cause: "the previous booking checked out early",
+        });
       }
 
       return {

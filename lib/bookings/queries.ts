@@ -25,6 +25,10 @@ interface BookingRow {
   checked_out_at: string | null;
   closed_at: string | null;
   closure_reason: string | null;
+  cancelled_by: string | null;
+  cancelled_by_name: string | null;
+  requester_id: string;
+  promoted_at: string | null;
   created_at: string;
   updated_at: string;
   eligibility_snapshot_json: string | null;
@@ -56,6 +60,10 @@ export interface MyBooking {
   updatedAt: string;
   canCancel: boolean;
   canCheckOut: boolean;
+  /** Set when someone other than the requester (staff) cancelled it. */
+  cancelledByStaffName: string | null;
+  promotedAt: string | null;
+  hasStarted: boolean;
   eligibilityWarnings: EligibilityWarning[];
 }
 
@@ -132,9 +140,16 @@ function mapBooking(row: BookingRow): MyBooking {
     updatedAt: row.updated_at,
     canCancel:
       row.status === "pending" ||
+      (row.status === "waitlisted" && Date.parse(row.start_at) > Date.now()) ||
       (row.status === "approved" &&
         Date.parse(row.start_at) > Date.now()),
     canCheckOut: row.status === "checked_in",
+    cancelledByStaffName:
+      row.cancelled_by && row.cancelled_by !== row.requester_id
+        ? row.cancelled_by_name
+        : null,
+    promotedAt: row.promoted_at,
+    hasStarted: Date.parse(row.start_at) <= Date.now(),
     eligibilityWarnings: eligibilityWarnings(row.eligibility_snapshot_json),
   };
 }
@@ -145,12 +160,15 @@ const BOOKING_SELECT = `
     b.end_at, b.status, b.decision_reason, b.decided_at, b.cancelled_at,
     b.cancellation_reason, b.eligibility_override_reason, b.checked_in_at,
     b.checked_out_at, b.closed_at, b.closure_reason, b.created_at,
-    b.updated_at, b.eligibility_snapshot_json,
+    b.updated_at, b.eligibility_snapshot_json, b.cancelled_by, b.requester_id,
+    b.promoted_at,
     r.code AS room_code, r.name AS room_name, r.building, r.location,
-    decision_actor.display_name AS decision_actor_name
+    decision_actor.display_name AS decision_actor_name,
+    cancel_actor.display_name AS cancelled_by_name
   FROM bookings b
   JOIN rooms r ON r.id = b.room_id
   LEFT JOIN profiles decision_actor ON decision_actor.id = b.decided_by
+  LEFT JOIN profiles cancel_actor ON cancel_actor.id = b.cancelled_by
 `;
 
 export function listMyBookings(
@@ -165,7 +183,7 @@ export function listMyBookings(
        WHERE b.requester_id = ?
        ORDER BY
          CASE
-           WHEN b.status IN ('pending', 'approved', 'checked_in')
+           WHEN b.status IN ('pending', 'waitlisted', 'approved', 'checked_in')
             AND b.start_at >= ? THEN 0
            ELSE 1
          END,

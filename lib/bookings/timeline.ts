@@ -40,15 +40,21 @@ interface BookingScopeRow {
 function actionTitle(action: string): string | null {
   switch (action) {
     case "booking.submitted":
-      return "Request submitted";
+      return "Request sent";
+    case "booking.waitlist_joined":
+      return "Joined the waitlist";
+    case "booking.waitlisted":
+      return "Moved to the waitlist";
+    case "booking.promoted":
+      return "Back in review from the waitlist";
     case "booking.approved":
-      return "Request approved";
+      return "Approved";
     case "booking.rejected":
-      return "Request not approved";
+      return "Not approved";
     case "booking.cancelled":
-      return "Request or booking cancelled";
+      return "Cancelled";
     case "booking.completed":
-      return "Booking completed";
+      return "Completed";
     default:
       return null;
   }
@@ -59,6 +65,8 @@ function actionKind(action: string): TimelineEntryKind {
     case "booking.approved":
     case "booking.rejected":
     case "booking.cancelled":
+    case "booking.waitlisted":
+    case "booking.promoted":
       return "decision";
     case "booking.completed":
       return "completion";

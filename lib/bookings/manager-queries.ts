@@ -9,6 +9,12 @@ import {
 } from "@/lib/rooms/queries";
 import type { RoomHours, RoomPolicy, RoomRequirement } from "@/lib/rooms/types";
 import {
+  DEFAULT_ROOM_POLICY,
+  POLICY_SELECT_COLUMNS,
+  policyFromColumns,
+  type PolicyColumns,
+} from "@/lib/rooms/policy";
+import {
   campusLocalDayRange,
   formatCampusDate,
   formatCampusTimeRange,
@@ -16,6 +22,7 @@ import {
 
 export const MANAGER_QUEUE_STATUSES = [
   "pending",
+  "waitlisted",
   "approved",
   "rejected",
   "cancelled",
@@ -39,6 +46,7 @@ export interface ParsedManagerFilters {
 
 export interface ManagerQueueCounts {
   pending: number;
+  waitlisted: number;
   approved: number;
   rejected: number;
   cancelled: number;
@@ -126,6 +134,7 @@ export interface ManagerHistoryItem {
 }
 
 export interface ManagerRequestDetail extends ManagerQueueItem {
+  allocationExceptionReason: string | null;
   room: ManagerRoomContext;
   requirements: RoomRequirement[];
   outstandingRequirements: RoomRequirement[];
@@ -173,19 +182,15 @@ interface ManagerBookingRow {
   cancellation_reason: string | null;
   eligibility_override_reason: string | null;
   eligibility_snapshot_json: string | null;
+  allocation_exception_reason: string | null;
 }
 
-interface ManagerRoomRow {
+interface ManagerRoomRow extends PolicyColumns {
   id: string;
   status: string;
   capacity: number;
   facilities: string;
   policy_summary: string;
-  requests_enabled: number | null;
-  slot_interval_minutes: number | null;
-  minimum_notice_minutes: number | null;
-  maximum_duration_minutes: number | null;
-  buffer_minutes: number | null;
 }
 
 interface ManagerHoursRow {
@@ -273,6 +278,7 @@ const MANAGER_SELECT = `
     b.expected_attendance, b.start_at, b.end_at, b.status, b.created_at,
     b.decision_reason, b.decided_at, b.cancelled_at, b.cancellation_reason,
     b.eligibility_override_reason, b.eligibility_snapshot_json,
+    b.allocation_exception_reason,
     r.code AS room_code, r.name AS room_name, r.building, r.location,
     r.capacity, r.manager_id,
     requester.display_name AS requester_name,
@@ -352,13 +358,7 @@ function pendingOverlapCount(
 }
 
 function roomPolicy(row: ManagerRoomRow): RoomPolicy {
-  return {
-    requestsEnabled: row.requests_enabled === 1,
-    slotIntervalMinutes: row.slot_interval_minutes ?? 30,
-    minimumNoticeMinutes: row.minimum_notice_minutes ?? 30,
-    maximumDurationMinutes: row.maximum_duration_minutes ?? 240,
-    bufferMinutes: row.buffer_minutes ?? 0,
-  };
+  return policyFromColumns(row);
 }
 
 function hydrateQueueItem(
@@ -433,33 +433,13 @@ function loadPolicies(
   const placeholders = roomIds.map(() => "?").join(", ");
   const rows = db
     .prepare(
-      `SELECT
-         room_id, requests_enabled, slot_interval_minutes,
-         minimum_notice_minutes, maximum_duration_minutes, buffer_minutes
-       FROM room_booking_policies
-       WHERE room_id IN (${placeholders})`,
+      `SELECT policy.room_id, ${POLICY_SELECT_COLUMNS}
+       FROM room_booking_policies policy
+       WHERE policy.room_id IN (${placeholders})`,
     )
-    .all(...roomIds) as Array<{
-    room_id: string;
-    requests_enabled: number;
-    slot_interval_minutes: number;
-    minimum_notice_minutes: number;
-    maximum_duration_minutes: number;
-    buffer_minutes: number;
-  }>;
+    .all(...roomIds) as Array<PolicyColumns & { room_id: string }>;
 
-  return new Map(
-    rows.map((row) => [
-      row.room_id,
-      {
-        requestsEnabled: row.requests_enabled === 1,
-        slotIntervalMinutes: row.slot_interval_minutes,
-        minimumNoticeMinutes: row.minimum_notice_minutes,
-        maximumDurationMinutes: row.maximum_duration_minutes,
-        bufferMinutes: row.buffer_minutes,
-      },
-    ]),
-  );
+  return new Map(rows.map((row) => [row.room_id, policyFromColumns(row)]));
 }
 
 function scopedRooms(
@@ -484,6 +464,7 @@ export function listManagerQueue(
 ): ManagerQueueResult {
   const emptyCounts: ManagerQueueCounts = {
     pending: 0,
+    waitlisted: 0,
     approved: 0,
     rejected: 0,
     cancelled: 0,
@@ -549,7 +530,7 @@ export function listManagerQueue(
   );
   let items = rows.map((row) => hydrateQueueItem(db, row, policies));
 
-  if (filters.status === "pending") {
+  if (filters.status === "pending" || filters.status === "waitlisted") {
     items.sort(
       (left, right) =>
         left.createdAt.localeCompare(right.createdAt) ||
@@ -613,9 +594,7 @@ export function getManagerRequest(
     .prepare(
       `SELECT
          r.id, r.status, r.capacity, r.facilities, r.policy_summary,
-         policy.requests_enabled, policy.slot_interval_minutes,
-         policy.minimum_notice_minutes, policy.maximum_duration_minutes,
-         policy.buffer_minutes
+         ${POLICY_SELECT_COLUMNS}
        FROM rooms r
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
        WHERE r.id = ?`,
@@ -698,19 +677,14 @@ export function getManagerRequest(
 
   return {
     ...item,
+    allocationExceptionReason: row.allocation_exception_reason,
     room: {
       status: roomRow?.status ?? "inactive",
       requestsEnabled: policy?.requestsEnabled ?? false,
       capacity: roomRow?.capacity ?? row.capacity,
       facilities: roomRow ? parseFacilities(roomRow.facilities) : [],
       policySummary: roomRow?.policy_summary ?? "",
-      policy: policy ?? {
-        requestsEnabled: false,
-        slotIntervalMinutes: 30,
-        minimumNoticeMinutes: 30,
-        maximumDurationMinutes: 240,
-        bufferMinutes: 0,
-      },
+      policy: policy ?? { ...DEFAULT_ROOM_POLICY, requestsEnabled: false },
       hours,
     },
     requirements: roomRow ? currentRequirements : [],

@@ -3,10 +3,12 @@ import { z } from "zod";
 import { getProfileById, type UserProfile } from "@/lib/auth/service";
 import type { RoomRelayDatabase } from "@/lib/db/client";
 import type { IncidentStatus } from "@/lib/incidents/constants";
+import { createNotification, requesterLink } from "@/lib/notifications/service";
 
 interface IncidentRow {
   id: string;
   booking_id: string;
+  reporter_id: string;
   status: IncidentStatus;
   room_id: string;
   room_code: string;
@@ -67,7 +69,7 @@ function loadIncident(
   const row = db
     .prepare(
       `SELECT
-         i.id, i.booking_id, i.status,
+         i.id, i.booking_id, i.reporter_id, i.status,
          b.room_id, r.code AS room_code, r.name AS room_name,
          r.manager_id AS room_manager_id
        FROM incidents i
@@ -222,6 +224,18 @@ export function reviewIncident(
           reviewNote: parsed.data.note,
         },
       });
+
+      if (incident.reporter_id !== freshActor.id) {
+        createNotification(db, {
+          recipientId: incident.reporter_id,
+          kind: "incident_update",
+          title: `Your reported issue is being reviewed: ${incident.room_name}`,
+          body: `${freshActor.displayName} started reviewing the issue you reported. An administrator records the final outcome. No penalty is applied automatically.`,
+          linkPath: requesterLink(incident.booking_id),
+          bookingId: incident.booking_id,
+          createdAt: nowIso,
+        });
+      }
 
       return {
         ok: true,
@@ -399,6 +413,20 @@ export function resolveIncident(
             },
           });
         }
+      }
+
+      if (incident.reporter_id !== freshActor.id) {
+        createNotification(db, {
+          recipientId: incident.reporter_id,
+          kind: "incident_update",
+          title: `Issue resolved: ${incident.room_name}`,
+          body: bookingCompleted
+            ? "The issue you reported has a final resolution, and your booking is now complete. Open the booking to read the resolution note."
+            : "The issue you reported has a final resolution. Open the booking to read the resolution note.",
+          linkPath: requesterLink(incident.booking_id),
+          bookingId: incident.booking_id,
+          createdAt: nowIso,
+        });
       }
 
       return {

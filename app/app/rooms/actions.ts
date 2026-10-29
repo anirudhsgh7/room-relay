@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { submitBookingRequest } from "@/lib/bookings/service";
@@ -12,6 +13,9 @@ export interface BookingFormState {
   fieldErrors?: FieldErrors;
   alternatives?: SafeAlternative[];
   duplicateId?: string;
+  waitlistAvailable?: boolean;
+  /** Echo of the submitted values so a retry keeps what the person typed. */
+  values?: Record<string, string>;
 }
 
 function formString(formData: FormData, name: string): string {
@@ -35,8 +39,7 @@ export async function submitBookingRequestAction(
     };
   }
 
-  const result = submitBookingRequest(getDatabase(), profile, {
-    roomCode: formString(formData, "roomCode"),
+  const values = {
     startDate: formString(formData, "startDate"),
     startTime: formString(formData, "startTime"),
     endTime: formString(formData, "endTime"),
@@ -44,10 +47,18 @@ export async function submitBookingRequestAction(
     groupName: formString(formData, "groupName"),
     expectedAttendance: formString(formData, "expectedAttendance"),
     acknowledgement: formString(formData, "acknowledgement"),
+  };
+
+  const result = submitBookingRequest(getDatabase(), profile, {
+    roomCode: formString(formData, "roomCode"),
+    ...values,
     idempotencyKey: formString(formData, "idempotencyKey"),
+    joinWaitlist: formString(formData, "joinWaitlist"),
   });
 
   if (result.ok) {
+    revalidatePath("/app");
+    revalidatePath("/app/bookings");
     redirect(`/app/bookings/${result.receipt.id}?created=1`);
   }
 
@@ -56,17 +67,27 @@ export async function submitBookingRequestAction(
       return {
         error: result.message,
         fieldErrors: result.fieldErrors,
+        values,
       };
     case "conflict":
-    case "outside_hours":
       return {
         error: result.message,
         alternatives: result.alternatives,
+        waitlistAvailable: result.waitlistAvailable,
+        values,
+      };
+    case "outside_hours":
+    case "blackout":
+      return {
+        error: result.message,
+        alternatives: result.alternatives,
+        values,
       };
     case "duplicate":
       return {
         error: result.message,
         duplicateId: result.bookingId,
+        values,
       };
     case "rate_limited":
       return {
@@ -75,14 +96,17 @@ export async function submitBookingRequestAction(
               result.retryAfterSeconds / 60,
             )} minute(s).`
           : result.message,
+        values,
       };
     case "service_error":
       return {
         error: `${result.message} Reference: ${result.correlationId.slice(0, 8)}`,
+        values,
       };
     case "unavailable":
     case "forbidden":
     case "idempotency_mismatch":
-      return { error: result.message };
+    case "quota":
+      return { error: result.message, values };
   }
 }

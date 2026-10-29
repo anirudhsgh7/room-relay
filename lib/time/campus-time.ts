@@ -326,3 +326,54 @@ export function addMinutesToInstant(instant: string, minutes: number): string {
     .add({ minutes })
     .toString();
 }
+
+/**
+ * Converts a campus-local date and optional time to a UTC instant. Unlike
+ * booking intervals, closures may span days, so a time inside a
+ * daylight-saving gap resolves to the next valid instant instead of failing.
+ * Returns null for an invalid date or time.
+ */
+export function campusLocalToUtc(
+  date: string,
+  time = "00:00",
+  timeZone = getCampusTimezone(),
+): string | null {
+  const parts = parseTimeParts(time);
+
+  if (!parts) {
+    return null;
+  }
+
+  try {
+    const plainDate = Temporal.PlainDate.from(date, { overflow: "reject" });
+    const zoned = Temporal.ZonedDateTime.from(
+      {
+        timeZone,
+        year: plainDate.year,
+        month: plainDate.month,
+        day: plainDate.day,
+        hour: parts.hour,
+        minute: parts.minute,
+        second: 0,
+      },
+      { disambiguation: "compatible" },
+    );
+
+    return zoned.toInstant().toString();
+  } catch {
+    return null;
+  }
+}
+
+/** The campus-local date (YYYY-MM-DD) and time (HH:MM) of a UTC instant. */
+export function campusLocalParts(
+  instant: string,
+  timeZone = getCampusTimezone(),
+): { date: string; time: string } {
+  const zoned = Temporal.Instant.from(instant).toZonedDateTimeISO(timeZone);
+
+  return {
+    date: zoned.toPlainDate().toString(),
+    time: minutesToTime(zoned.hour * 60 + zoned.minute),
+  };
+}

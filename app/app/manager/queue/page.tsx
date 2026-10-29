@@ -14,14 +14,15 @@ import { getDatabase } from "@/lib/db/client";
 import { formatCampusDate, formatCampusTime } from "@/lib/time/campus-time";
 
 export const metadata: Metadata = {
-  title: "Manager queue",
-  description: "Review room requests assigned to your room portfolio.",
+  title: "Requests to review",
+  description: "Review room requests for the rooms you manage.",
 };
 
 const statusTabs: Array<{ status: ManagerQueueStatus; label: string }> = [
-  { status: "pending", label: "Pending review" },
+  { status: "pending", label: "To review" },
+  { status: "waitlisted", label: "Waitlisted" },
   { status: "approved", label: "Approved" },
-  { status: "rejected", label: "Rejected" },
+  { status: "rejected", label: "Declined" },
   { status: "cancelled", label: "Cancelled" },
 ];
 
@@ -65,53 +66,28 @@ export default async function ManagerQueuePage({
 
   return (
     <div className="space-y-7">
-      <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-        <div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">
-              {profile.role === "admin" ? "Institution review" : "Manager workspace"}
-            </p>
-            <StatusChip tone="green">Phase 3 review live</StatusChip>
-          </div>
-          <h1 className="mt-3 max-w-3xl font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-            {profile.role === "admin"
-              ? "Review requests across the institution."
-              : "Decide the requests in your rooms."}
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700 sm:text-base sm:leading-7">
-            {profile.role === "admin"
-              ? "Review pending requests across the institution. Every decision is attributed to your admin account."
-              : "Your queue is limited to rooms assigned to you. Approval rechecks today's room policy, eligibility, and confirmed conflicts before saving."}
-          </p>
-        </div>
-        <div className="surface shrink-0 px-4 py-3">
-          <p className="text-[0.62rem] font-bold uppercase tracking-[0.14em] text-ink-600">
-            Pending
-          </p>
-          <p className="mt-1 font-display text-3xl leading-none tracking-[-0.03em] text-ink-950">
-            {result.counts.pending}
-          </p>
-          <p className="mt-1.5 text-[0.65rem] text-ink-600">
-            {profile.role === "admin" ? "institution-wide" : "assigned rooms"}
-          </p>
-        </div>
+      <section>
+        <h1 className="font-display text-4xl leading-tight tracking-[-0.03em] text-ink-950 sm:text-5xl">
+          Requests to review
+        </h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-ink-700 sm:text-base sm:leading-7">
+          {profile.role === "admin"
+            ? "Every room on campus. Decisions you make are recorded under your name."
+            : "Requests for the rooms you manage, oldest first. When several people want the same time, each request shows its place under the room's published rule."}
+        </p>
       </section>
 
       <section className="surface overflow-hidden" aria-labelledby="queue-heading">
         <div className="border-b border-sand-200 px-4 pt-4 sm:px-5">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <p id="queue-heading" className="text-sm font-bold text-ink-950">
-                Request queue
-              </p>
-              <p className="mt-1 text-xs text-ink-600">
-                Pending requests are not reservations until a manager approves
-                them.
+              <h2 id="queue-heading" className="text-base font-bold text-ink-950">
+                {result.total} {result.total === 1 ? "request" : "requests"}
+              </h2>
+              <p className="mt-1 text-sm text-ink-600">
+                A request holds nothing until it is approved.
               </p>
             </div>
-            <span className="font-mono text-[0.62rem] font-semibold text-ink-600">
-              {result.total} matching
-            </span>
           </div>
           <nav
             className="mt-4 flex gap-1 overflow-x-auto"
@@ -125,14 +101,14 @@ export default async function ManagerQueuePage({
                   page: 1,
                 })}`}
                 aria-current={activeTab === tab.status ? "page" : undefined}
-                className={`whitespace-nowrap rounded-t-lg border-b-2 px-3 pb-2.5 pt-2 text-xs font-semibold transition ${
+                className={`whitespace-nowrap rounded-t-lg border-b-2 px-3 pb-2.5 pt-2 text-sm font-semibold transition ${
                   activeTab === tab.status
                     ? "border-brand-600 text-ink-950"
                     : "border-transparent text-ink-600 hover:text-ink-950"
                 }`}
               >
                 {tab.label}
-                <span className="ml-1.5 rounded-full bg-sand-100 px-1.5 py-0.5 font-mono text-[0.6rem] text-ink-700">
+                <span className="ml-1.5 rounded-full bg-sand-100 px-1.5 py-0.5 text-xs tabular-nums text-ink-700">
                   {result.counts[tab.status]}
                 </span>
               </Link>
@@ -181,7 +157,7 @@ export default async function ManagerQueuePage({
               htmlFor="eligibility"
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
-              Eligibility
+              Requirements
             </label>
             <select
               id="eligibility"
@@ -190,7 +166,7 @@ export default async function ManagerQueuePage({
               className="field"
             >
               <option value="all">All requests</option>
-              <option value="needs_review">Needs eligibility review</option>
+              <option value="needs_review">Requirements not met yet</option>
             </select>
           </div>
           <div className="lg:col-span-2">
@@ -198,7 +174,7 @@ export default async function ManagerQueuePage({
               htmlFor="conflict"
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
-              Conflict
+              Competition
             </label>
             <select
               id="conflict"
@@ -207,7 +183,7 @@ export default async function ManagerQueuePage({
               className="field"
             >
               <option value="all">All requests</option>
-              <option value="any">Has an overlap</option>
+              <option value="any">Competes for its time</option>
             </select>
           </div>
           <div className="flex items-end lg:col-span-2">
@@ -218,8 +194,8 @@ export default async function ManagerQueuePage({
         </form>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 px-4 py-2.5 sm:px-5">
-          <p className="text-[0.65rem] text-ink-600">
-            Default order: oldest pending request first. Dates are campus-local.
+          <p className="text-xs text-ink-600">
+            Oldest request first. Times are campus time.
           </p>
           {parsedFilters.filters.roomCode ||
           parsedFilters.filters.date ||
@@ -277,19 +253,18 @@ export default async function ManagerQueuePage({
                     </p>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {request.outstandingRequirementCount > 0 ? (
-                        <StatusChip tone="amber">Eligibility review</StatusChip>
+                        <StatusChip tone="amber">Check requirements</StatusChip>
                       ) : (
-                        <StatusChip tone="green">Eligibility clear</StatusChip>
+                        <StatusChip tone="green">Meets requirements</StatusChip>
                       )}
                       {request.status === "pending" &&
                       request.pendingOverlapCount > 0 ? (
                         <StatusChip tone="amber">
-                          {request.pendingOverlapCount} pending overlap
-                          {request.pendingOverlapCount === 1 ? "" : "s"}
+                          {request.pendingOverlapCount + 1} want this time
                         </StatusChip>
                       ) : null}
                       {request.hasConfirmedConflict ? (
-                        <StatusChip tone="red">Confirmed conflict</StatusChip>
+                        <StatusChip tone="red">Time already booked</StatusChip>
                       ) : null}
                     </div>
                   </div>
@@ -338,7 +313,7 @@ export default async function ManagerQueuePage({
             </span>
             <h2 className="mt-4 text-base font-bold text-ink-950">
               {parsedFilters.filters.status === "pending"
-                ? "No pending requests match."
+                ? "Nothing to review."
                 : "No requests in this view."}
             </h2>
             <p className="mt-2 max-w-sm text-sm leading-6 text-ink-600">

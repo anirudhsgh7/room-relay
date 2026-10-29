@@ -22,8 +22,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 - `npm run dev` triggers `predev` → `db:setup`, which creates `.env.local`, applies migrations, and seeds demo data.
 - Local database: `data/room-relay.db` (ignored). Never commit it or `.env.local`.
 - `db:setup` is safe to rerun, but many seeded bookings/events are insert-only. Use `npm run db:reset` to refresh relative demo dates, the active access window, and a clean demo state.
-- Migrations are forward-only. Never edit `db/migrations/001`–`005`; add the next numbered SQL file and run `db:setup` (or `db:reset` locally).
-- Docs live in `docs/`: plan, context PDF, and Phase 1–5 PRDs.
+- Migrations are forward-only. Never edit `db/migrations/001`–`006`; add the next numbered SQL file and run `db:setup` (or `db:reset` locally).
+- Docs live in `docs/`: plan, context PDF, and Phase 1–5 PRDs. Seed only creates rooms that don't exist; never make it overwrite admin-owned data.
 
 ## Architecture and rules that are easy to break
 
@@ -34,8 +34,12 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
   - `lib/bookings`: request, decisions, cancellation, checkout, timeline
   - `lib/access`: simulated access policy, events, history
   - `lib/incidents`: review/resolution services and queries
-  - `lib/rooms`: catalog/availability; `lib/time`: campus timezone/DST handling
-- Booking transitions enforced by triggers: `pending→approved|rejected|cancelled`, `approved→cancelled|checked_in`, `checked_in→completed|incident`, `incident→completed`. A clean checkout requires an after-use condition report; an issue checkout requires an incident; an incident booking completes only when all incidents are resolved.
+  - `lib/rooms`: catalog/availability, `policy.ts` (published rule copy), `blackouts.ts`; `lib/time`: campus timezone/DST handling
+  - `lib/allocation/ranking.ts`: the one ranking implementation; `lib/bookings/waitlist.ts`: settle-after-approval and promotion
+  - `lib/admin/rooms.ts`: room administration; `lib/notifications`: inbox + reminder sweep; `lib/assistant`: read-only assistant
+- Use `intervalsConflict`/`getBlockingBookings` for overlap: the buffer applies after every booking (symmetric).
+- Emit notifications inside the same transaction as the state change they describe.
+- Booking transitions enforced by triggers: `pending→approved|rejected|cancelled|waitlisted`, `waitlisted→pending|rejected|cancelled`, `approved→cancelled|checked_in`, `checked_in→completed|incident`, `incident→completed`. Staff (active admin or the room's manager) may record cancellations; a booking can never become approved inside an active blackout. A clean checkout requires an after-use condition report; an issue checkout requires an incident; an incident booking completes only when all incidents are resolved.
 - Only the access service may set `approved→checked_in`. Access checks are **simulated**; never claim a physical door unlocked.
 - `access_events`, `audit_events`, and `condition_reports` are append-only; resolved incidents are immutable. Do not edit/delete history to “fix” state.
 - Store timestamps as UTC ISO strings. Use `lib/time/campus-time.ts` (Temporal) for campus-local conversion; do not use process-local `Date` formatting.

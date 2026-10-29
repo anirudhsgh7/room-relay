@@ -27,7 +27,7 @@ describe("role-scoped foundation queries", () => {
     expect(snapshot).toMatchObject({
       activeRooms: 4,
       totalRooms: 5,
-      migrationsApplied: 5,
+      migrationsApplied: 6,
       assignedRooms: [],
       managedPendingBookings: null,
       ownActiveBookings: 4,

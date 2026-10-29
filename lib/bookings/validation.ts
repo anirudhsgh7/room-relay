@@ -35,6 +35,10 @@ export const bookingRequestSubmissionSchema = z.object({
       message: "Confirm that you understand the request is not approved access.",
     }),
   idempotencyKey: z.uuid("Refresh the form and try again."),
+  joinWaitlist: z
+    .string()
+    .optional()
+    .transform((value) => value === "on"),
 });
 
 export type BookingRequestSubmission = z.input<

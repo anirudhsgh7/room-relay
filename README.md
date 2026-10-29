@@ -4,7 +4,14 @@
 
 RoomRelay is a university room-booking and access-management prototype. The complete product connects discovery, fair requests, room-manager decisions, time-bound access checks, check-out, and an accountable audit history.
 
-This repository currently implements **Phase 5: Check-out, condition and incident handling, and lifecycle history**. The complete demo lifecycle runs from room discovery and manager approval through simulated access, check-in, requester check-out, post-use condition reporting, human-reviewed incidents, and a connected booking timeline.
+This repository implements **Phase 6: operations and usability** on top of the complete Phase 5 lifecycle (discovery → approval → simulated access → check-out → human-reviewed incidents → timeline). Phase 6 adds:
+
+- **Room administration** — admins add and edit rooms, assign managers, open/close rooms, and set weekly hours, closures (blackouts), and structured booking rules. A room's own manager can change its hours, closures, and rules.
+- **Published allocation rules** — each room ranks competing requests by *First come, first served*, *Best use of space*, or *Fair share*. Approving out of order requires a recorded reason.
+- **Transparent waitlists** — join a waitlist for a booked time; approving one request waitlists its competitors with their position; freed time returns waitlisted requests to review automatically.
+- **Notifications and reminders** — in-app inbox for decisions, cancellations, waitlist moves, and incident updates, plus reminders before a booking, before check-out, overdue check-outs, and undecided requests.
+- **Ask RoomRelay** — a grounded assistant that answers in plain language from live data (free rooms, rules, your bookings, what needs attention). It never changes anything itself; it links to the real forms.
+- **Plain-language UI** — task-focused home per role, no build jargon, rules and closures published on every room page.
 
 > **Prototype notice:** RoomRelay is not approved for controlling real restricted doors. All accounts and credentials in this repository are public demo fixtures. A pending request is not permission to enter. Access checks are software simulations: no NFC reader, relay, lock, or physical door is connected, and an ALLOW result never represents a real unlock. Incidents are human-reviewed observations, not automatic findings of fault or penalties.
 
@@ -36,16 +43,17 @@ This repository currently implements **Phase 5: Check-out, condition and inciden
 | Connected request-to-close-out lifecycle timeline | Complete |
 | Public preview deployment | Requires a hosting provider and URL |
 
-### What Phase 5 deliberately does not include
+### What is deliberately not included
 
-- Photo upload/storage, notifications, email, calendar export, analytics, or payments
+- Photo upload/storage, email/SMS delivery, calendar export, analytics, or payments (notifications are in-app only)
 - Automatic no-show classification, penalties, sanctions, or trust scores
 - Manager/admin check-out on behalf of a requester
 - Appeals or AI-generated incident findings
 - Physical NFC/QR reader integration, relay/door output, or live door actuation
 - Offline access or production anti-cloning hardware protocols
 - Admin credential-binding/revocation UI or full room/user administration
-- A “request changes” or waitlist workflow
+- A “request changes” workflow, or automatic approval from the waitlist (freed time returns requests to human review)
+- An external AI model: the assistant is deterministic and read-only by design
 
 The application labels these areas as future phases rather than presenting nonfunctional controls.
 
@@ -130,6 +138,22 @@ The suspended account is not shown in the login directory. A second active stude
 24. Try the suspended account. Authentication fails after password verification.
 
 The app has no browser-facing database API, so SQLite cannot be queried directly from the client even if the UI is bypassed.
+
+## Phase 6 walkthrough
+
+1. **Allocation and waitlist.** Sign in as **Priya Nair** → *Requests to review* → open Noah Williams's Media Studio request. It shows *Number 2 of 2* under *First come, first served*. Try approving it: the panel asks why it should go first. Approve Amelia's instead: Noah moves to the waitlist and is notified with his position.
+2. **Freed time.** Sign in as **Amelia Chen** → *My bookings* → cancel the approved Media Studio booking. Noah's request returns to Priya's queue automatically and both are notified.
+3. **Join a waitlist.** As Amelia, request Seminar Room 02 at the time of its approved booking. The form offers *Join the waitlist*.
+4. **Room administration.** Sign in as **Rowan Ellis** → *Rooms and rules*. Add a room, change hours, add a closure over an existing booking (you'll see the impact and must confirm), or change the allocation rule. As Priya, *My rooms* allows hours, closures, and rules for her rooms only.
+5. **Notifications.** Every step above appears under *Notifications* with an unread badge. Reminders are generated on page loads (at most once a minute) or by `npm run reminders`.
+6. **Assistant.** Use *Ask RoomRelay* (bottom right): “a room for 10 tomorrow 2–4pm with a projector”, “is SEM-02 free friday at 3”, “how are requests ranked?”, “what needs my attention?”.
+
+### Operational rules worth knowing
+
+- **Changeover buffer is symmetric.** Migration 006 fixes an order-dependent bug: the buffer was only enforced after whichever booking was approved first. Every confirmed booking now occupies `[start, end + buffer)`.
+- **Raising the buffer is refused** if it would make already-approved bookings collide.
+- **Closures and room closing** show the affected bookings first; confirming cancels them and tells each person why. Bookings in use are never interrupted.
+- **Setup no longer overwrites admin edits.** `db:setup` (run by `npm start`) only seeds rooms that do not exist yet, and skips existing booking fixtures (SQLite runs insert triggers even for rows `ON CONFLICT DO NOTHING` would skip).
 
 ## Commands
 
@@ -327,9 +351,9 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
 {
   "status": "ok",
   "service": "roomrelay",
-  "phase": 5,
+  "phase": 6,
   "database": "ok",
-  "migrations": 5,
+  "migrations": 6,
   "checkedAt": "2026-10-28T06:01:07.556Z"
 }
 ```
@@ -372,7 +396,7 @@ The suite covers:
 - safe redirects that reject open-redirect payloads;
 - rate-limit windows and key isolation.
 
-The current suite contains 122 tests across 16 files.
+The current suite contains 195 tests across 20 files, including allocation ranking, waitlist promotion, closures, room administration, reminders, notifications, and the assistant parser and answers.
 
 `npm run test:smoke` additionally starts the production server and checks the live `/api/health` response, login page, anonymous redirects, room discovery, request and manager flows, the access simulator, access history scoping, requester incident pages, manager/admin incident routes, anonymous API rejection, and simulation notices over HTTP. It uses port `3107` and requires a production build plus an initialized database.
 
@@ -422,4 +446,4 @@ See `.env.example`. Never commit `.env.local` or a populated database.
 
 ## Next phase
 
-**Phase 6 — Hardening and submission:** deployment, complete role/state/concurrency testing, backup demo, documentation, and final submission materials.
+**Next — Hardening and submission:** public deployment, email delivery for notifications, concurrency testing under load, a backup demo, and final submission materials.

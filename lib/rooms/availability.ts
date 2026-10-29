@@ -1,5 +1,6 @@
 import type { RoomRelayDatabase } from "@/lib/db/client";
 import type { UserProfile } from "@/lib/auth/service";
+import { findOverlappingBlackouts } from "@/lib/rooms/blackouts";
 import { minutesToTime, type CampusInterval } from "@/lib/time/campus-time";
 
 export interface BlockingBooking {
@@ -17,12 +18,18 @@ interface BlockingBookingRow {
 }
 
 export interface AvailabilityCheck {
-  code: "available" | "conflict" | "outside_hours";
+  code: "available" | "conflict" | "outside_hours" | "blackout";
   conflictingBookingId?: string;
+  blackoutReason?: string;
 }
 
 const CONFIRMED_STATUSES = ["approved", "checked_in"] as const;
 
+/**
+ * Confirmed bookings that block [startUtc, endUtc). Every confirmed booking
+ * occupies its own interval plus the room's changeover buffer, and so does the
+ * candidate, so the result does not depend on which booking was approved first.
+ */
 export function getBlockingBookings(
   db: RoomRelayDatabase,
   roomId: string,
@@ -34,13 +41,18 @@ export function getBlockingBookings(
     .prepare(
       `SELECT id, room_id, start_at, end_at
        FROM bookings
-       WHERE room_id = ?
+       WHERE room_id = @room_id
          AND status IN ('approved', 'checked_in')
-         AND julianday(start_at) < julianday(?)
-         AND julianday(end_at) + (? / 1440.0) > julianday(?)
+         AND julianday(start_at) < julianday(@end_at) + (@buffer / 1440.0)
+         AND julianday(end_at) + (@buffer / 1440.0) > julianday(@start_at)
        ORDER BY start_at`,
     )
-    .all(roomId, endUtc, bufferMinutes, startUtc) as BlockingBookingRow[];
+    .all({
+      room_id: roomId,
+      start_at: startUtc,
+      end_at: endUtc,
+      buffer: bufferMinutes,
+    }) as BlockingBookingRow[];
 
   return rows.map((row) => ({
     id: row.id,
@@ -127,6 +139,17 @@ export function checkRoomAvailability(
     return { code: "outside_hours" };
   }
 
+  const [blackout] = findOverlappingBlackouts(
+    db,
+    input.roomId,
+    input.interval.startUtc,
+    input.interval.endUtc,
+  );
+
+  if (blackout) {
+    return { code: "blackout", blackoutReason: blackout.reason };
+  }
+
   const [conflict] = getBlockingBookings(
     db,
     input.roomId,
@@ -140,6 +163,20 @@ export function checkRoomAvailability(
   }
 
   return { code: "available" };
+}
+
+/**
+ * The single conflict rule shared by discovery, requests, decisions, the
+ * waitlist, and the database trigger: two bookings conflict when their
+ * intervals, each extended by the changeover buffer, overlap.
+ */
+export function intervalsConflict(
+  left: { startMs: number; endMs: number },
+  right: { startMs: number; endMs: number },
+  bufferMinutes: number,
+): boolean {
+  const buffer = bufferMinutes * 60_000;
+  return left.startMs < right.endMs + buffer && right.startMs < left.endMs + buffer;
 }
 
 export function isConfirmedStatus(status: string): boolean {
@@ -161,7 +198,7 @@ export function findPendingDuplicate(
        FROM bookings
        WHERE requester_id = ?
          AND room_id = ?
-         AND status = 'pending'
+         AND status IN ('pending', 'waitlisted')
          AND julianday(start_at) < julianday(?)
          AND julianday(end_at) > julianday(?)
        ORDER BY created_at

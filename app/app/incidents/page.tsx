@@ -54,29 +54,29 @@ export default async function IncidentsPage({
       <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Condition & incidents · Phase 5</p>
             <StatusChip tone="neutral">
-              {isAdmin ? "Institution-wide" : "Assigned rooms"}
+              {isAdmin ? "All rooms" : "Your rooms"}
             </StatusChip>
           </div>
           <h1 className="mt-3 font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-            {isAdmin ? "Resolve the record." : "Review what was reported."}
+            Reported issues
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700">
-            An incident is an observation, not an automatic finding of fault.
-            Managers can recommend; an administrator records the final
-            operational resolution. No automatic penalties are applied.
+            Problems people reported when they checked out. A report isn&apos;t
+            a finding of fault: the room manager reviews it first, then an
+            administrator records the outcome. Nothing is penalised
+            automatically.
           </p>
         </div>
         <div className="surface shrink-0 px-4 py-3">
-          <p className="text-[0.62rem] font-bold uppercase tracking-[0.14em] text-ink-600">
-            Active incidents
+          <p className="text-sm font-semibold text-ink-600">
+            Still open
           </p>
           <p className="mt-1 font-display text-3xl leading-none tracking-[-0.03em] text-ink-950">
             {result.counts.open + result.counts.reviewing}
           </p>
-          <p className="mt-1.5 text-[0.65rem] text-ink-600">
-            open or in review
+          <p className="mt-1.5 text-xs text-ink-600">
+            new or being reviewed
           </p>
         </div>
       </section>

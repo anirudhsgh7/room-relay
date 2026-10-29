@@ -29,6 +29,7 @@ describe("database migrations and seed data", () => {
       { name: "003_phase3_manager_review.sql" },
       { name: "004_phase4_access_policy.sql" },
       { name: "005_phase5_closeout.sql" },
+      { name: "006_operations.sql" },
     ]);
   });
 

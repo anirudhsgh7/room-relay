@@ -232,8 +232,8 @@ describe("incident review and close-out", () => {
 
     expect(timeline).not.toBeNull();
     const titles = timeline?.entries.map((entry) => entry.title) ?? [];
-    expect(titles).toContain("Request submitted");
-    expect(titles).toContain("Request approved");
+    expect(titles).toContain("Request sent");
+    expect(titles).toContain("Approved");
     expect(titles).toContain("Simulated access allowed");
     expect(titles).toContain("Check-out condition reported");
     expect(

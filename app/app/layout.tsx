@@ -7,12 +7,19 @@ import {
   WorkspaceNav,
 } from "@/components/workspace-nav";
 import { signOutAction } from "@/app/app/actions";
+import { AssistantPanel } from "@/components/assistant/assistant-panel";
+import {
+  ASSISTANT_GREETING,
+  assistantSuggestions,
+} from "@/lib/assistant/respond";
 import { requireCurrentProfile } from "@/lib/auth/session";
-import { ROLE_LABELS } from "@/lib/domain";
+import { getDatabase } from "@/lib/db/client";
+import { maybeRunReminderSweep } from "@/lib/notifications/reminders";
+import { getWorkspaceCounts } from "@/lib/workspace/counts";
 
 export const metadata: Metadata = {
   title: "Workspace",
-  description: "RoomRelay room discovery and request workspace.",
+  description: "Find rooms, manage bookings, and follow every request in RoomRelay.",
 };
 
 export const dynamic = "force-dynamic";
@@ -32,6 +39,11 @@ export default async function WorkspaceLayout({
   children: React.ReactNode;
 }>) {
   const profile = await requireCurrentProfile();
+  const db = getDatabase();
+  // Reminders need no separate scheduler: page loads deliver anything due,
+  // at most once a minute per server process.
+  maybeRunReminderSweep(db);
+  const counts = getWorkspaceCounts(db, profile);
 
   return (
     <div className="min-h-screen bg-sand-50 lg:grid lg:grid-cols-[17.5rem_1fr]">
@@ -45,12 +57,9 @@ export default async function WorkspaceLayout({
               </span>
             </span>
           </Link>
-          <p className="mt-4 font-mono text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-white/35">
-            Close-out workspace · v0.5
-          </p>
         </div>
 
-        <WorkspaceNav role={profile.role} />
+        <WorkspaceNav role={profile.role} counts={counts} />
 
         <div className="border-t border-white/[0.08] p-3">
           <div className="rounded-xl bg-white/[0.04] p-3">
@@ -93,9 +102,6 @@ export default async function WorkspaceLayout({
               </button>
             </form>
           </div>
-          <p className="mt-3 px-1 text-[0.58rem] leading-4 text-white/25">
-            {ROLE_LABELS[profile.role]} · Server-verified session
-          </p>
         </div>
       </aside>
 
@@ -108,6 +114,28 @@ export default async function WorkspaceLayout({
             </span>
           </Link>
           <div className="flex items-center gap-2">
+            <Link
+              href="/app/notifications"
+              className="relative inline-flex size-9 items-center justify-center rounded-full border border-sand-200 bg-white text-ink-700"
+              aria-label={
+                counts.unread > 0
+                  ? `Notifications, ${counts.unread} unread`
+                  : "Notifications"
+              }
+            >
+              <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" className="size-4">
+                <path
+                  d="M4 11.5V7a4 4 0 1 1 8 0v4.5l1 1H3l1-1ZM6.5 14h3"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {counts.unread > 0 ? (
+                <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-flag-red ring-2 ring-sand-50" />
+              ) : null}
+            </Link>
             <RoleBadge role={profile.role} compact />
             <form action={signOutAction}>
               <button
@@ -133,11 +161,15 @@ export default async function WorkspaceLayout({
             </form>
           </div>
         </header>
-        <WorkspaceMobileNav role={profile.role} />
+        <WorkspaceMobileNav role={profile.role} counts={counts} />
 
-        <main className="mx-auto max-w-6xl px-4 py-6 sm:px-7 sm:py-9 lg:px-10 lg:py-12">
+        <main className="mx-auto max-w-6xl px-4 pt-6 pb-28 sm:px-7 sm:pt-9 lg:px-10 lg:pt-12">
           {children}
         </main>
+        <AssistantPanel
+          greeting={ASSISTANT_GREETING[profile.role]}
+          starters={assistantSuggestions(profile.role)}
+        />
       </div>
     </div>
   );

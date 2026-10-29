@@ -1,15 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 import {
   decideBookingAction,
   type DecisionFormState,
 } from "@/app/app/manager/actions";
-import type { SafeRequirement } from "@/lib/bookings/decisions";
+import type { OutrankingRequest, SafeRequirement } from "@/lib/bookings/decisions";
 
 interface DecisionPanelProps {
   bookingId: string;
   outstandingRequirements: SafeRequirement[];
+  /** Competing requests the room's published rule puts ahead of this one. */
+  outranking: OutrankingRequest[];
+  ruleLabel: string;
 }
 
 function FieldError({ message, id }: { message?: string; id: string }) {
@@ -27,6 +31,8 @@ function FieldError({ message, id }: { message?: string; id: string }) {
 export function DecisionPanel({
   bookingId,
   outstandingRequirements,
+  outranking: initialOutranking,
+  ruleLabel: initialRuleLabel,
 }: DecisionPanelProps) {
   const [mode, setMode] = useState<"approve" | "reject">("approve");
   const [overrideEnabled, setOverrideEnabled] = useState(false);
@@ -36,6 +42,10 @@ export function DecisionPanel({
   >(decideBookingAction, {});
 
   const hasOutstanding = outstandingRequirements.length > 0;
+  // The server re-ranks on submit; if the line changed meanwhile, its answer wins.
+  const outranking = state.outranking ?? initialOutranking;
+  const ruleLabel = state.ruleLabel ?? initialRuleLabel;
+  const outOfOrder = mode === "approve" && outranking.length > 0;
   const showOverride =
     mode === "approve" && hasOutstanding && overrideEnabled;
 
@@ -45,12 +55,12 @@ export function DecisionPanel({
       aria-labelledby="decision-heading"
     >
       <div className="border-b border-sand-200 px-5 py-4">
-        <p id="decision-heading" className="text-sm font-bold text-ink-950">
-          Manager decision
-        </p>
-        <p className="mt-1 text-xs leading-5 text-ink-600">
-          Every decision rechecks current room policy, eligibility, and
-          confirmed conflicts before saving.
+        <h2 id="decision-heading" className="text-base font-bold text-ink-950">
+          Your decision
+        </h2>
+        <p className="mt-1 text-sm leading-6 text-ink-600">
+          The requester sees your reason. Room rules, requirements, and other
+          bookings are checked again when you save.
         </p>
       </div>
 
@@ -78,7 +88,7 @@ export function DecisionPanel({
                 : "text-ink-600 hover:text-ink-950"
             }`}
           >
-            Reject
+            Decline
           </button>
         </div>
 
@@ -109,8 +119,8 @@ export function DecisionPanel({
               className="mb-1.5 block text-xs font-semibold text-ink-800"
             >
               {mode === "approve"
-                ? "Why are you approving this request?"
-                : "Why are you rejecting this request?"}
+                ? "Message to the requester"
+                : "Why are you declining this request?"}
             </label>
             <textarea
               id="decisionReason"
@@ -128,11 +138,9 @@ export function DecisionPanel({
                   : "decision-reason-help"
               }
             />
-            <p
-              id="decision-reason-help"
-              className="mt-1.5 text-xs text-ink-600"
-            >
-              Required, 10–500 characters. Keep it specific and neutral.
+            <p id="decision-reason-help" className="field-help">
+              At least 10 characters. Be specific, e.g. &ldquo;Approved. Please
+              leave the tables in rows.&rdquo;
             </p>
             <FieldError
               id="decision-reason-error"
@@ -142,19 +150,19 @@ export function DecisionPanel({
 
           {mode === "reject" ? (
             <p className="rounded-xl border border-sand-200 bg-sand-50 p-3.5 text-xs leading-5 text-ink-600">
-              Rejecting closes this request. The requester sees the reason and
-              can submit a new request later.
+              Declining closes this request. The requester sees your reason and
+              can ask for another time or room.
             </p>
           ) : null}
 
           {mode === "approve" && hasOutstanding ? (
             <div className="rounded-xl border border-flag-amber/20 bg-flag-amber-bg p-4">
               <p className="text-sm font-bold text-flag-amber">
-                Eligibility review is required.
+                The room&apos;s requirements aren&apos;t met yet
               </p>
               <p className="mt-1 text-xs leading-5 text-flag-amber">
-                Normal approval is blocked until these requirements are
-                verified or explicitly overridden for this booking only.
+                Approve only once these are confirmed, or waive them for this
+                booking with a recorded reason.
               </p>
               <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
                 {outstandingRequirements.map((requirement) => (
@@ -170,8 +178,8 @@ export function DecisionPanel({
                   className="mt-0.5 size-4 shrink-0 accent-amber-700"
                 />
                 <span>
-                  Override eligibility for this booking only. This does not
-                  verify the student&apos;s profile for future requests.
+                  Waive for this booking only. Their record isn&apos;t changed for
+                  future requests.
                 </span>
               </label>
 
@@ -179,7 +187,7 @@ export function DecisionPanel({
                 <div className="mt-3 space-y-3 border-t border-flag-amber/20 pt-3">
                   <fieldset>
                     <legend className="text-xs font-semibold text-ink-900">
-                      Unmet requirements to override
+                      Requirements to waive
                     </legend>
                     <div className="mt-2 space-y-2">
                       {outstandingRequirements.map((requirement) => (
@@ -203,7 +211,7 @@ export function DecisionPanel({
                       htmlFor="overrideReason"
                       className="mb-1.5 block text-xs font-semibold text-ink-800"
                     >
-                      Override reason
+                      Why are you waiving them?
                     </label>
                     <textarea
                       id="overrideReason"
@@ -211,7 +219,7 @@ export function DecisionPanel({
                       rows={2}
                       maxLength={500}
                       className="field h-auto min-h-20 resize-y py-3"
-                      placeholder="Explain the human review basis for this exception."
+                      placeholder="e.g. Induction completed with the technician; the record update is pending."
                       aria-invalid={Boolean(state.fieldErrors?.overrideReason)}
                       aria-describedby={
                         state.fieldErrors?.overrideReason
@@ -233,6 +241,43 @@ export function DecisionPanel({
             </div>
           ) : null}
 
+          {outOfOrder ? (
+            <div className="rounded-xl border border-flag-amber/20 bg-flag-amber-bg p-4">
+              <p className="text-sm font-bold text-flag-amber">
+                {outranking.length === 1
+                  ? "Another request is ahead of this one"
+                  : `${outranking.length} requests are ahead of this one`}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-flag-amber">
+                This room uses &ldquo;{ruleLabel}&rdquo;. To approve out of
+                order, record why. The reason is logged with your decision.
+              </p>
+              <ul className="mt-2 space-y-1 text-xs text-ink-800">
+                {outranking.map((item) => (
+                  <li key={item.id}>
+                    <Link href={`/app/manager/requests/${item.id}`} className="font-semibold underline underline-offset-2">
+                      {item.requesterName}
+                    </Link>{" "}
+                    · {item.comparison}
+                  </li>
+                ))}
+              </ul>
+              <label htmlFor="allocationExceptionReason" className="field-label mt-3">
+                Why should this request go first?
+              </label>
+              <textarea
+                id="allocationExceptionReason"
+                name="allocationExceptionReason"
+                rows={2}
+                maxLength={500}
+                className="field h-auto min-h-20 resize-y bg-white py-3"
+                placeholder="e.g. Fixed exam date that cannot move; the other group confirmed it can."
+                aria-invalid={Boolean(state.fieldErrors?.allocationExceptionReason)}
+              />
+              <p className="field-help">At least 20 characters.</p>
+            </div>
+          ) : null}
+
           <button
             type="submit"
             disabled={pending}
@@ -245,8 +290,10 @@ export function DecisionPanel({
             {pending
               ? "Saving decision…"
               : mode === "approve"
-                ? "Approve request"
-                : "Reject request"}
+                ? outOfOrder
+                  ? "Approve out of order"
+                  : "Approve request"
+                : "Decline request"}
           </button>
         </form>
       </div>

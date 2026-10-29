@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { randomUUID } from "node:crypto";
-import { BrandMark } from "@/components/brand";
-import { StatusChip } from "@/components/badges";
 import { BookingRequestForm } from "@/app/app/rooms/[code]/request/booking-form";
 import { requireCurrentProfile } from "@/lib/auth/session";
 import { getCampusTimezone } from "@/lib/config";
@@ -11,10 +9,11 @@ import { getDatabase } from "@/lib/db/client";
 import { canRequestRoom, getRoomDetail } from "@/lib/rooms/queries";
 import { parseRoomSearchParams } from "@/lib/rooms/search";
 import { nextWeekdayLocalDate } from "@/lib/time/campus-time";
+import { ALLOCATION_RULE_COPY, describePolicy } from "@/lib/rooms/policy";
 
 export const metadata: Metadata = {
   title: "Request a room",
-  description: "Submit a room request for manager review.",
+  description: "Send a room request to the room's manager.",
 };
 
 export default async function RoomRequestPage({
@@ -45,41 +44,43 @@ export default async function RoomRequestPage({
       ? parsed.values.date || nextWeekdayLocalDate()
       : nextWeekdayLocalDate(),
     startTime: parsed.ok ? parsed.values.startTime || "10:00" : "10:00",
-    endTime: parsed.ok ? parsed.values.endTime || "11:30" : "11:30",
+    endTime: parsed.ok ? parsed.values.endTime || "11:00" : "11:00",
+    expectedAttendance: (() => {
+      const raw = Array.isArray(rawParams.people) ? rawParams.people[0] : rawParams.people;
+      const value = Number(raw);
+      return Number.isInteger(value) && value >= 1 && value <= room.capacity
+        ? String(value)
+        : String(Math.min(2, room.capacity));
+    })(),
   };
   const unverifiedRequirements = room.requirements.filter(
     (requirement) =>
       requirement.required && requirement.verification !== "verified",
   );
 
+  const rule = ALLOCATION_RULE_COPY[room.policy.allocationRule];
+
   return (
     <div className="space-y-6">
-      <nav className="flex items-center gap-2 text-xs text-ink-600" aria-label="Breadcrumb">
+      <nav className="text-sm text-ink-600" aria-label="Breadcrumb">
         <Link href="/app/rooms" className="hover:text-ink-950">
-          Room discovery
+          Find a room
         </Link>
-        <span aria-hidden="true">/</span>
-        <Link
-          href={`/app/rooms/${encodeURIComponent(room.code)}`}
-          className="hover:text-ink-950"
-        >
-          {room.code}
+        <span aria-hidden="true"> / </span>
+        <Link href={`/app/rooms/${encodeURIComponent(room.code)}`} className="hover:text-ink-950">
+          {room.name}
         </Link>
-        <span aria-hidden="true">/</span>
+        <span aria-hidden="true"> / </span>
         <span className="font-semibold text-ink-800">Request</span>
       </nav>
 
       <section>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <p className="eyebrow">New request · Pending by design</p>
-          <StatusChip tone="amber">Not approved yet</StatusChip>
-        </div>
-        <h1 className="mt-3 max-w-3xl font-display text-4xl leading-[1.02] tracking-[-0.04em] text-ink-950 sm:text-5xl">
-          Request {room.name}.
+        <h1 className="font-display text-4xl leading-[1.05] tracking-[-0.03em] text-ink-950 sm:text-5xl">
+          Request {room.name}
         </h1>
-        <p className="mt-4 max-w-2xl text-sm leading-6 text-ink-700">
-          Tell the room manager what you need. Submitting creates a pending
-          request; it does not reserve the room or authorize entry.
+        <p className="mt-3 max-w-2xl text-base leading-7 text-ink-700">
+          Tell the room manager when and why. You&apos;ll be notified as soon as
+          they decide.
         </p>
       </section>
 
@@ -87,8 +88,9 @@ export default async function RoomRequestPage({
         <section className="surface p-5 sm:p-6">
           <BookingRequestForm
             roomCode={room.code}
-            roomName={room.name}
             capacity={room.capacity}
+            slotMinutes={room.policy.slotIntervalMinutes}
+            ruleLabel={rule.label}
             idempotencyKey={randomUUID()}
             timeZone={timeZone}
             defaults={defaults}
@@ -97,80 +99,38 @@ export default async function RoomRequestPage({
         </section>
 
         <aside className="space-y-5">
-          <section className="relative overflow-hidden rounded-2xl bg-ink-950 p-5 text-white">
-            <div className="grid-paper pointer-events-none absolute inset-0 opacity-70" />
-            <div className="relative">
-              <BrandMark tone="dark" size="sm" />
-              <p className="mt-4 label text-brand-300">Your request</p>
-              <h2 className="mt-2 font-display text-2xl tracking-[-0.03em]">
-                {room.name}
-              </h2>
-              <p className="mt-1 text-xs text-white/45">
-                {room.building} · {room.location}
-              </p>
-              <div className="mt-5 space-y-3 border-t border-white/10 pt-4 text-xs">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/45">Capacity</span>
-                  <span className="font-semibold">{room.capacity} seats</span>
+          <section className="surface p-5">
+            <h2 className="text-lg font-bold text-ink-950">{room.name}</h2>
+            <p className="mt-1 text-sm text-ink-600">
+              {room.building}, {room.location} · {room.capacity} seats
+            </p>
+            {room.policySummary ? (
+              <p className="mt-3 text-sm leading-6 text-ink-700">{room.policySummary}</p>
+            ) : null}
+            <dl className="mt-4 space-y-2 border-t border-sand-200 pt-4 text-sm">
+              {describePolicy(room.policy).map((line) => (
+                <div key={line.label} className="flex items-start justify-between gap-3">
+                  <dt className="text-ink-600">{line.label}</dt>
+                  <dd className="text-right font-semibold text-ink-950">{line.value}</dd>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/45">Booking window</span>
-                  <span className="text-right font-semibold">
-                    {room.policy.slotIntervalMinutes} min slots
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/45">Maximum</span>
-                  <span className="font-semibold">
-                    {room.policy.maximumDurationMinutes} minutes
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/45">Notice required</span>
-                  <span className="font-semibold">
-                    {room.policy.minimumNoticeMinutes} minutes
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-white/45">Timezone</span>
-                  <span className="max-w-[9rem] break-all text-right font-mono text-[0.62rem]">
-                    {timeZone}
-                  </span>
-                </div>
+              ))}
+              <div className="flex items-start justify-between gap-3">
+                <dt className="text-ink-600">Requirements</dt>
+                <dd className="text-right font-semibold text-ink-950">
+                  {unverifiedRequirements.length > 0
+                    ? `${unverifiedRequirements.length} not done yet`
+                    : requiredRequirementLabel(room.requirements)}
+                </dd>
               </div>
-              <div className="mt-5 rounded-xl border border-brand-300/20 bg-brand-300/[0.08] p-3.5">
-                <p className="text-[0.62rem] font-bold uppercase tracking-[0.13em] text-brand-300">
-                  Remember
-                </p>
-                <p className="mt-1.5 text-xs leading-5 text-white/60">
-                  Pending is not approved. A manager reviews the request before
-                  it becomes permission to use the room.
-                </p>
-              </div>
-            </div>
+            </dl>
           </section>
 
-          <section className="surface p-5">
-            <p className="eyebrow">Room rules</p>
-            <p className="mt-2 text-sm leading-6 text-ink-700">
-              {room.policySummary}
+          <section className="rounded-2xl bg-ink-950 p-5 text-white">
+            <h2 className="font-display text-xl tracking-[-0.02em]">If someone else wants the same time</h2>
+            <p className="mt-2 text-sm leading-6 text-white/70">
+              This room uses {rule.label}: {rule.short.toLowerCase()} If the time
+              is already booked, you can join the waitlist instead.
             </p>
-            <div className="mt-4 space-y-2.5 border-t border-sand-200 pt-4 text-xs">
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-ink-600">Requested by</span>
-                <span className="text-right font-semibold text-ink-950">
-                  {profile.displayName}
-                </span>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-ink-600">Requirements</span>
-                <span className="text-right font-semibold text-ink-950">
-                  {unverifiedRequirements.length > 0
-                    ? `${unverifiedRequirements.length} needs review`
-                    : requiredRequirementLabel(room.requirements)}
-                </span>
-              </div>
-            </div>
           </section>
         </aside>
       </div>
@@ -182,5 +142,5 @@ function requiredRequirementLabel(
   requirements: Array<{ required: boolean; verification: string | null }>,
 ): string {
   const required = requirements.filter((requirement) => requirement.required);
-  return required.length === 0 ? "None" : `${required.length} verified`;
+  return required.length === 0 ? "None" : "All done";
 }

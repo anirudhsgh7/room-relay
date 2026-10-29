@@ -20,7 +20,7 @@ export async function GET() {
       {
         status: "ok",
         service: "roomrelay",
-        phase: 5,
+        phase: 6,
         database: "ok",
         migrations: migrationRow.count,
         checkedAt,
@@ -41,7 +41,7 @@ export async function GET() {
       {
         status: "degraded",
         service: "roomrelay",
-        phase: 5,
+        phase: 6,
         database: "unavailable",
         reason,
         checkedAt,

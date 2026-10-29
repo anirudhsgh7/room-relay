@@ -73,9 +73,9 @@ try {
   const healthResponse = await waitForServer();
   const health = await healthResponse.json();
   assert(health.status === "ok", "Health check did not report ok.");
-  assert(health.phase === 5, "Health check did not report the Phase 5 service.");
+  assert(health.phase === 6, "Health check did not report the Phase 6 service.");
   assert(health.database === "ok", "Health check did not report a healthy database.");
-  assert(health.migrations === 5, "The Phase 5 migration was not reported as applied.");
+  assert(health.migrations === 6, "The Phase 6 migration was not reported as applied.");
 
   const loginResponse = await fetch(`${baseUrl}/login`);
   assert(loginResponse.status === 200, "The login page did not return 200.");
@@ -127,7 +127,8 @@ try {
   assert(studentApp.status === 200, "The seeded student could not load /app.");
   assert(
     studentHtml.includes("Amelia Chen") &&
-      studentHtml.includes("Own the full room lifecycle."),
+      studentHtml.includes("Your upcoming bookings") &&
+      studentHtml.includes("Ask RoomRelay"),
     "The student workspace did not render the expected server-resolved profile.",
   );
   assert(
@@ -145,7 +146,7 @@ try {
   const studentRoomsHtml = await studentRooms.text();
   assert(studentRooms.status === 200, "The student could not load room discovery.");
   assert(
-    studentRoomsHtml.includes("Find the right room") &&
+    studentRoomsHtml.includes("Find a room") &&
       studentRoomsHtml.includes("Seminar Room 02"),
     "Room discovery did not render the active room catalog.",
   );
@@ -157,9 +158,9 @@ try {
   const requestHtml = await requestPage.text();
   assert(requestPage.status === 200, "The request form did not render.");
   assert(
-    requestHtml.includes("Submit request") &&
-      requestHtml.includes("not permission to") &&
-      requestHtml.includes("Pending by design"),
+    requestHtml.includes("Send request") &&
+      requestHtml.includes("If someone else wants the same time") &&
+      requestHtml.includes("First come, first served"),
     "The request form did not communicate its pending-only meaning.",
   );
 
@@ -170,7 +171,8 @@ try {
   assert(studentBookings.status === 200, "The student could not load My requests.");
   assert(
     studentBookingsHtml.includes("Media Studio 01") &&
-      studentBookingsHtml.includes("Pending review"),
+      studentBookingsHtml.includes("Pending review") &&
+      studentBookingsHtml.includes("My bookings"),
     "My requests did not show the requester's seeded pending request.",
   );
 
@@ -182,7 +184,7 @@ try {
   assert(
     studentBookingDetail.status === 200 &&
       studentBookingDetailHtml.includes("Cancel request") &&
-      studentBookingDetailHtml.includes("not permission to enter"),
+      studentBookingDetailHtml.includes("Waiting for the room manager"),
     "The requester could not see the pending receipt or cancellation control.",
   );
 
@@ -193,8 +195,8 @@ try {
   const studentIncidentBookingHtml = await studentIncidentBooking.text();
   assert(
     studentIncidentBooking.status === 200 &&
-      studentIncidentBookingHtml.includes("Incident status") &&
-      studentIncidentBookingHtml.includes("Lifecycle history"),
+      studentIncidentBookingHtml.includes("Reported issues") &&
+      studentIncidentBookingHtml.includes("Booking history"),
     "The requester booking did not show incident status or lifecycle history.",
   );
 
@@ -226,14 +228,31 @@ try {
     "A student was able to load the manager queue.",
   );
 
+
+  const studentAdminRooms = await fetch(`${baseUrl}/app/admin/rooms`, {
+    headers: { Cookie: `roomrelay_session=${studentToken}` },
+  });
+  assert(studentAdminRooms.status === 404, "A student could open room administration.");
+
+  const studentRoomPage = await fetch(`${baseUrl}/app/rooms/MED-01`, {
+    headers: { Cookie: `roomrelay_session=${studentToken}` },
+  });
+  const studentRoomPageHtml = await studentRoomPage.text();
+  assert(
+    studentRoomPage.status === 200 &&
+      studentRoomPageHtml.includes("If others want the same time") &&
+      studentRoomPageHtml.includes("Booking rules"),
+    "The room page did not publish its booking and allocation rules.",
+  );
+
   const studentAccess = await fetch(`${baseUrl}/app/access`, {
     headers: { Cookie: `roomrelay_session=${studentToken}` },
   });
   const studentAccessHtml = await studentAccess.text();
   assert(studentAccess.status === 200, "The student could not load access checks.");
   assert(
-    studentAccessHtml.includes("Simulated access check") &&
-      studentAccessHtml.includes("No NFC reader") &&
+    studentAccessHtml.includes("Tap your card") &&
+      studentAccessHtml.includes("No card reader or door lock is connected") &&
       studentAccessHtml.includes("NFC card"),
     "The access simulator did not render its credentials or simulation disclaimer.",
   );
@@ -244,7 +263,7 @@ try {
   const studentAccessHistoryHtml = await studentAccessHistory.text();
   assert(
     studentAccessHistory.status === 200 &&
-      studentAccessHistoryHtml.includes("Your access attempts."),
+      studentAccessHistoryHtml.includes("My taps"),
     "The student access history did not render.",
   );
 
@@ -256,7 +275,7 @@ try {
   assert(managerApp.status === 200, "The seeded manager could not load /app.");
   assert(
     managerHtml.includes("Media Studio 01") &&
-      managerHtml.includes("Quiet Study 03") &&
+      managerHtml.includes("Requests to review") &&
       !managerHtml.includes("Seminar Room 02"),
     "The manager workspace was not scoped to the assigned room portfolio.",
   );
@@ -268,7 +287,7 @@ try {
   assert(managerQueue.status === 200, "The manager queue did not render.");
   assert(
     managerQueueHtml.includes("Media Studio 01") &&
-      managerQueueHtml.includes("pending overlap") &&
+      managerQueueHtml.includes("want this time") &&
       !managerQueueHtml.includes("Seminar Room 02"),
     "The manager queue was not scoped to Priya's assigned rooms.",
   );
@@ -280,8 +299,9 @@ try {
   const managerRequestDetailHtml = await managerRequestDetail.text();
   assert(
     managerRequestDetail.status === 200 &&
-      managerRequestDetailHtml.includes("Manager decision") &&
-      managerRequestDetailHtml.includes("Eligibility review is required"),
+      managerRequestDetailHtml.includes("Your decision") &&
+      managerRequestDetailHtml.includes("requirements aren&#x27;t met yet") &&
+      managerRequestDetailHtml.includes("First in line of 2 requests for this time"),
     "The manager review detail did not render the eligibility decision state.",
   );
 
@@ -291,7 +311,7 @@ try {
   const managerIncidentsHtml = await managerIncidents.text();
   assert(
     managerIncidents.status === 200 &&
-      managerIncidentsHtml.includes("Incident queue") &&
+      managerIncidentsHtml.includes("Reported issues") &&
       managerIncidentsHtml.includes("Media Studio 01"),
     "The manager incident queue did not render assigned-room incidents.",
   );
@@ -344,6 +364,52 @@ try {
     "A manager was able to open the student request form.",
   );
 
+
+  // Room administration: managers see their own rooms; only admins add rooms.
+  const managerRooms = await fetch(`${baseUrl}/app/admin/rooms`, {
+    headers: { Cookie: `roomrelay_session=${managerToken}` },
+  });
+  const managerRoomsHtml = await managerRooms.text();
+  assert(
+    managerRooms.status === 200 &&
+      managerRoomsHtml.includes("My rooms") &&
+      managerRoomsHtml.includes("Media Studio 01") &&
+      !managerRoomsHtml.includes("Seminar Room 02") &&
+      !managerRoomsHtml.includes("Add a room"),
+    "The manager room list was not scoped to assigned rooms.",
+  );
+
+  const managerOwnRoom = await fetch(`${baseUrl}/app/admin/rooms/room_media_studio`, {
+    headers: { Cookie: `roomrelay_session=${managerToken}` },
+  });
+  const managerOwnRoomHtml = await managerOwnRoom.text();
+  assert(
+    managerOwnRoom.status === 200 &&
+      managerOwnRoomHtml.includes("Opening hours") &&
+      managerOwnRoomHtml.includes("Booking rules") &&
+      managerOwnRoomHtml.includes("Only an administrator can change these"),
+    "A manager could not manage their own room's hours and rules.",
+  );
+
+  const managerOtherRoom = await fetch(`${baseUrl}/app/admin/rooms/room_seminar_02`, {
+    headers: { Cookie: `roomrelay_session=${managerToken}` },
+  });
+  assert(managerOtherRoom.status === 404, "A manager could open another manager's room settings.");
+
+  const managerNewRoom = await fetch(`${baseUrl}/app/admin/rooms/new`, {
+    headers: { Cookie: `roomrelay_session=${managerToken}` },
+  });
+  assert(managerNewRoom.status === 404, "A manager could open the add-room form.");
+
+  const managerNotifications = await fetch(`${baseUrl}/app/notifications`, {
+    headers: { Cookie: `roomrelay_session=${managerToken}` },
+  });
+  assert(
+    managerNotifications.status === 200 &&
+      (await managerNotifications.text()).includes("Notifications"),
+    "The notifications page did not render.",
+  );
+
   const managerAccessHistory = await fetch(`${baseUrl}/app/access/history`, {
     headers: { Cookie: `roomrelay_session=${managerToken}` },
   });
@@ -367,6 +433,28 @@ try {
     "The admin queue was not institution-wide.",
   );
 
+
+  const adminRooms = await fetch(`${baseUrl}/app/admin/rooms`, {
+    headers: { Cookie: `roomrelay_session=${adminToken}` },
+  });
+  const adminRoomsHtml = await adminRooms.text();
+  assert(
+    adminRooms.status === 200 &&
+      adminRoomsHtml.includes("Rooms and rules") &&
+      adminRoomsHtml.includes("Add a room") &&
+      adminRoomsHtml.includes("Seminar Room 02") &&
+      adminRoomsHtml.includes("Media Studio 01"),
+    "The admin room list was not institution-wide.",
+  );
+
+  const adminNewRoom = await fetch(`${baseUrl}/app/admin/rooms/new`, {
+    headers: { Cookie: `roomrelay_session=${adminToken}` },
+  });
+  assert(
+    adminNewRoom.status === 200 && (await adminNewRoom.text()).includes("Room code"),
+    "The admin could not open the add-room form.",
+  );
+
   const adminIncident = await fetch(
     `${baseUrl}/app/incidents/incident_light_reviewing`,
     { headers: { Cookie: `roomrelay_session=${adminToken}` } },
@@ -380,7 +468,7 @@ try {
   );
 
   console.log(
-    "Smoke test passed: health, lifecycle roles, access, close-out, incidents, timeline, and privacy boundaries.",
+    "Smoke test passed: health, lifecycle roles, room administration, notifications, access, close-out, incidents, timeline, and privacy boundaries.",
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

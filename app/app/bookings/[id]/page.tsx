@@ -7,6 +7,7 @@ import { CheckoutForm } from "@/components/bookings/checkout-form";
 import { LifecycleTimeline } from "@/components/timeline/lifecycle-timeline";
 import { requireCurrentProfile } from "@/lib/auth/session";
 import { getMyBooking } from "@/lib/bookings/queries";
+import { getWaitlistStanding } from "@/lib/bookings/waitlist";
 import { getBookingTimeline } from "@/lib/bookings/timeline";
 import { getCampusTimezone } from "@/lib/config";
 import { getDatabase } from "@/lib/db/client";
@@ -18,8 +19,8 @@ import {
 } from "@/lib/time/campus-time";
 
 export const metadata: Metadata = {
-  title: "Request details",
-  description: "View your RoomRelay request status and details.",
+  title: "Booking",
+  description: "Status, decision, and history for one of your bookings.",
 };
 
 export default async function BookingDetailPage({
@@ -55,15 +56,19 @@ export default async function BookingDetailPage({
   const canCancel = booking.canCancel;
   const incidents = getBookingIncidents(db, booking.id);
   const timeline = getBookingTimeline(db, profile, booking.id);
+  const waitlistStanding =
+    booking.status === "waitlisted" ? getWaitlistStanding(db, booking.id) : null;
+  const waitlistClosed =
+    booking.status === "waitlisted" && booking.hasStarted;
 
   return (
     <div className="space-y-6">
       <nav className="flex items-center gap-2 text-xs text-ink-600" aria-label="Breadcrumb">
         <Link href="/app/bookings" className="hover:text-ink-950">
-          My requests
+          My bookings
         </Link>
         <span aria-hidden="true">/</span>
-        <span className="font-semibold text-ink-800">Request details</span>
+        <span className="font-semibold text-ink-800">{booking.roomName}</span>
       </nav>
 
       {justCreated ? (
@@ -86,10 +91,13 @@ export default async function BookingDetailPage({
               </svg>
             </span>
             <div>
-              <h2 className="text-lg font-bold">Request submitted</h2>
+              <h2 className="text-lg font-bold">
+                {booking.status === "waitlisted" ? "You're on the waitlist" : "Request sent"}
+              </h2>
               <p className="mt-1 text-sm leading-6">
-                It is now pending manager review. This is not permission to
-                enter the room.
+                {booking.status === "waitlisted"
+                  ? "If the time frees up, your request goes to the room manager automatically. We'll notify you."
+                  : "The room manager will approve or decline it. We'll notify you either way. Until then, the room isn't yours."}
               </p>
             </div>
           </div>
@@ -98,10 +106,9 @@ export default async function BookingDetailPage({
 
       {justCancelled ? (
         <section className="rounded-2xl border border-sand-300 bg-sand-100 p-5 text-ink-800">
-          <h2 className="text-lg font-bold">Booking cancelled</h2>
+          <h2 className="text-lg font-bold">Cancelled</h2>
           <p className="mt-1 text-sm leading-6">
-            The requested time has been released. Your cancellation reason and
-            booking history remain visible below.
+            The time has been released. The history below keeps your reason.
           </p>
         </section>
       ) : null}
@@ -129,32 +136,69 @@ export default async function BookingDetailPage({
 
       {booking.status === "approved" && !justCreated ? (
         <section className="rounded-2xl border border-flag-green/20 bg-flag-green-bg p-4 text-sm leading-6 text-flag-green">
-          <p className="font-bold">Approved by the room manager</p>
-          <p className="mt-1 text-xs leading-5">
-            The room/time is allocated. This is a booking decision, not a
-            confirmation that a physical door was unlocked. Access is handled in
-            Phase 4.
+          <p className="font-bold">Approved. The room is yours for this time.</p>
+          <p className="mt-1">
+            When you arrive, open{" "}
+            <Link href="/app/access" className="font-semibold underline underline-offset-2">
+              Check in
+            </Link>{" "}
+            and tap your card. You&apos;ll get a reminder beforehand.
           </p>
         </section>
       ) : null}
 
       {booking.status === "rejected" ? (
         <section className="rounded-2xl border border-flag-red/20 bg-flag-red-bg p-4 text-sm leading-6 text-flag-red">
-          <p className="font-bold">This request was not approved</p>
-          <p className="mt-1 text-xs leading-5">
-            Read the manager&apos;s reason below. You can submit a new request
-            for another time or room.
+          <p className="font-bold">Not approved</p>
+          <p className="mt-1">
+            The manager&apos;s reason is below. You can{" "}
+            <Link href="/app/rooms" className="font-semibold underline underline-offset-2">
+              look for another time or room
+            </Link>
+            .
           </p>
+        </section>
+      ) : null}
+
+      {booking.status === "cancelled" && booking.cancelledByStaffName && !justCancelled ? (
+        <section className="rounded-2xl border border-flag-red/20 bg-flag-red-bg p-4 text-sm leading-6 text-flag-red">
+          <p className="font-bold">Cancelled by {booking.cancelledByStaffName}</p>
+          <p className="mt-1">{booking.cancellationReason}</p>
+        </section>
+      ) : null}
+
+      {booking.status === "waitlisted" && !justCreated ? (
+        <section className="rounded-2xl border border-flag-amber/20 bg-flag-amber-bg p-4 text-sm leading-6 text-flag-amber">
+          {waitlistClosed ? (
+            <>
+              <p className="font-bold">Waitlist closed</p>
+              <p className="mt-1">The time didn&apos;t free up before it started.</p>
+            </>
+          ) : (
+            <>
+              <p className="font-bold">
+                {waitlistStanding
+                  ? `Number ${waitlistStanding.position} on the waitlist`
+                  : "On the waitlist"}
+              </p>
+              <p className="mt-1">
+                Another booking holds this time. If it is cancelled or ends
+                early, your request goes to the manager automatically and
+                you&apos;re notified. Places follow the room&apos;s rule
+                {waitlistStanding ? ` (${waitlistStanding.ruleLabel})` : ""}.
+              </p>
+            </>
+          )}
         </section>
       ) : null}
 
       <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <p className="eyebrow">Request receipt</p>
             <BookingStatusChip status={booking.status} />
-            {booking.eligibilityWarnings.length > 0 ? (
-              <StatusChip tone="amber">Eligibility review</StatusChip>
+            {booking.eligibilityWarnings.length > 0 &&
+            (booking.status === "pending" || booking.status === "waitlisted") ? (
+              <StatusChip tone="amber">Requirements to check</StatusChip>
             ) : null}
           </div>
           <h1 className="mt-3 max-w-3xl font-display text-4xl leading-[1.03] tracking-[-0.04em] text-ink-950 sm:text-5xl">
@@ -165,17 +209,19 @@ export default async function BookingDetailPage({
           </p>
         </div>
         <Link href="/app/bookings" className="btn-secondary shrink-0">
-          Back to my requests
+          All my bookings
         </Link>
       </section>
 
-      {booking.status === "pending" ? (
+      {booking.status === "pending" && !justCreated ? (
         <section className="rounded-2xl border border-flag-amber/20 bg-flag-amber-bg p-4 text-sm leading-6 text-flag-amber">
-          <p className="font-bold">Pending manager review</p>
-          <p className="mt-1 text-xs leading-5">
-            This request is <strong>not permission to enter</strong> the room and
-            does not reserve it. A manager must approve it before the access
-            workflow can treat it as valid.
+          <p className="font-bold">
+            {booking.promotedAt ? "Back in review from the waitlist" : "Waiting for the room manager"}
+          </p>
+          <p className="mt-1">
+            {booking.promotedAt
+              ? "The time you waited for freed up, so the manager is reviewing your request now. It isn't approved yet."
+              : "You'll be notified when they decide. Until it's approved, the room isn't yours."}
           </p>
         </section>
       ) : null}
@@ -183,10 +229,7 @@ export default async function BookingDetailPage({
       <div className="grid gap-5 xl:grid-cols-[1.3fr_0.9fr]">
         <section className="surface overflow-hidden">
           <div className="border-b border-sand-200 px-5 py-4 sm:px-6">
-            <p className="text-sm font-bold text-ink-950">Request details</p>
-            <p className="mt-0.5 text-xs text-ink-600">
-              Reference {booking.id}
-            </p>
+            <h2 className="text-base font-bold text-ink-950">Details</h2>
           </div>
           <dl className="divide-y divide-sand-200">
             {[
@@ -195,7 +238,7 @@ export default async function BookingDetailPage({
                 value: <BookingStatusChip status={booking.status} />,
               },
               {
-                label: "Campus date",
+                label: "Date",
                 value: formatCampusDate(booking.startAt, timezone),
               },
               {
@@ -215,7 +258,7 @@ export default async function BookingDetailPage({
                 value: booking.groupName ?? "Not specified",
               },
               {
-                label: "Expected attendance",
+                label: "People",
                 value: `${booking.expectedAttendance}`,
               },
               {
@@ -266,8 +309,8 @@ export default async function BookingDetailPage({
           </dl>
           {booking.decisionReason ? (
             <div className="border-t border-sand-200 bg-sand-50 px-5 py-4 sm:px-6">
-              <p className="text-[0.64rem] font-bold uppercase tracking-[0.13em] text-ink-600">
-                Manager decision reason
+              <p className="text-sm font-semibold text-ink-700">
+                {booking.status === "rejected" ? "Why it wasn't approved" : "Note from the manager"}
               </p>
               <p className="mt-1.5 text-sm leading-6 text-ink-800">
                 {booking.decisionReason}
@@ -287,8 +330,10 @@ export default async function BookingDetailPage({
           ) : null}
           {booking.cancellationReason ? (
             <div className="border-t border-sand-200 bg-flag-red-bg/35 px-5 py-4 sm:px-6">
-              <p className="text-[0.64rem] font-bold uppercase tracking-[0.13em] text-ink-600">
-                Cancellation reason
+              <p className="text-sm font-semibold text-ink-700">
+                {booking.cancelledByStaffName
+                  ? `Cancelled by ${booking.cancelledByStaffName}`
+                  : "Why you cancelled"}
               </p>
               <p className="mt-1.5 text-sm leading-6 text-ink-800">
                 {booking.cancellationReason}
@@ -304,53 +349,43 @@ export default async function BookingDetailPage({
         </section>
 
         <div className="space-y-5">
-          <section className="surface p-5">
-            <p className="eyebrow">Eligibility snapshot</p>
-            {booking.eligibilityWarnings.length > 0 ? (
-              <>
-                <p className="mt-3 text-sm leading-6 text-ink-700">
-                  These requirements were not verified when this request was
-                  submitted. A manager must review them before approval.
-                </p>
-                <ul className="mt-4 space-y-2.5">
-                  {booking.eligibilityWarnings.map((warning) => (
-                    <li
-                      key={warning.requirementId}
-                      className="rounded-xl border border-flag-amber/20 bg-flag-amber-bg p-3 text-xs leading-5 text-flag-amber"
-                    >
-                      {warning.description}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ) : (
-              <p className="mt-3 rounded-xl border border-flag-green/20 bg-flag-green-bg p-3 text-xs leading-5 text-flag-green">
-                No outstanding eligibility warning is recorded for this request.
+          {booking.eligibilityWarnings.length > 0 &&
+          (booking.status === "pending" || booking.status === "waitlisted") ? (
+            <section className="surface p-5">
+              <h2 className="text-base font-bold text-ink-950">Requirements to check</h2>
+              <p className="mt-1 text-sm leading-6 text-ink-700">
+                You hadn&apos;t completed these when you asked. The manager will
+                check them before approving.
               </p>
-            )}
-            {booking.eligibilityOverrideReason ? (
-              <div className="mt-4 rounded-xl border border-flag-amber/20 bg-flag-amber-bg p-3.5">
-                <p className="text-[0.64rem] font-bold uppercase tracking-[0.13em] text-flag-amber">
-                  Eligibility override
-                </p>
-                <p className="mt-1.5 text-xs leading-5 text-flag-amber">
-                  {booking.eligibilityOverrideReason}
-                </p>
-                <p className="mt-1.5 text-[0.65rem] leading-4 text-ink-600">
-                  This applied to this booking only. It did not verify your
-                  profile for future requests.
-                </p>
-              </div>
-            ) : null}
-          </section>
+              <ul className="mt-3 space-y-2">
+                {booking.eligibilityWarnings.map((warning) => (
+                  <li key={warning.requirementId} className="rounded-xl border border-flag-amber/20 bg-flag-amber-bg p-3 text-sm leading-6 text-flag-amber">
+                    {warning.description}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
+          {booking.eligibilityOverrideReason ? (
+            <section className="surface p-5">
+              <h2 className="text-base font-bold text-ink-950">Requirement waived for this booking</h2>
+              <p className="mt-1 text-sm leading-6 text-ink-700">{booking.eligibilityOverrideReason}</p>
+              <p className="mt-1 text-xs leading-5 text-ink-600">
+                This applies to this booking only, not future requests.
+              </p>
+            </section>
+          ) : null}
 
           {booking.canCheckOut ? (
-            <CheckoutForm bookingId={booking.id} />
+            <div id="check-out" className="scroll-mt-24">
+              <CheckoutForm bookingId={booking.id} />
+            </div>
           ) : null}
 
           {incidents.length > 0 ? (
             <section className="surface p-5">
-              <p className="eyebrow">Incident status</p>
+              <h2 className="text-base font-bold text-ink-950">Reported issues</h2>
               <ul className="mt-3 space-y-2">
                 {incidents.map((incident) => (
                   <li key={incident.id}>
@@ -390,39 +425,27 @@ export default async function BookingDetailPage({
           {canCancel ? (
             <CancelBookingForm
               bookingId={booking.id}
-              status={booking.status as "pending" | "approved"}
+              status={booking.status as "pending" | "approved" | "waitlisted"}
             />
           ) : null}
 
           <section className="surface p-5">
-            <p className="eyebrow">What happens next</p>
-            <ol className="mt-4 space-y-3">
-              {[
-                [
-                  "Manager review",
-                  "Pending requests are reviewed in the room manager's queue.",
-                ],
-                [
-                  "Access check",
-                  "Phase 4 connects approval to a simulated, time-bound access decision.",
-                ],
-                [
-                  "Close-out",
-                  "Phase 5 records condition and incident outcomes.",
-                ],
-              ].map(([title, copy], index) => (
-                <li key={title} className="flex gap-3">
-                  <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-sand-100 font-mono text-[0.62rem] font-bold text-ink-700">
-                    0{index + 1}
-                  </span>
-                  <div>
-                    <p className="text-xs font-semibold text-ink-950">{title}</p>
-                    <p className="mt-0.5 text-[0.68rem] leading-5 text-ink-600">
-                      {copy}
-                    </p>
-                  </div>
-                </li>
-              ))}
+            <h2 className="text-base font-bold text-ink-950">How it works</h2>
+            <ol className="mt-3 space-y-3 text-sm leading-6 text-ink-700">
+              <li>
+                <strong className="text-ink-950">Approval.</strong> The room
+                manager approves or declines. If others want the same time, the
+                room&apos;s published rule decides the order.
+              </li>
+              <li>
+                <strong className="text-ink-950">Check in.</strong> Tap your card
+                when you arrive, inside your booked time.
+              </li>
+              <li>
+                <strong className="text-ink-950">Check out.</strong> Note the
+                room&apos;s condition when you leave. Problems go to a person,
+                never an automatic penalty.
+              </li>
             </ol>
           </section>
         </div>
@@ -432,9 +455,8 @@ export default async function BookingDetailPage({
         <LifecycleTimeline timeline={timeline} timezone={timezone} />
       ) : null}
 
-      <p className="text-center text-[0.65rem] leading-5 text-ink-600/80">
-        This receipt belongs to {profile.displayName}. Times are shown in{" "}
-        {timezone}.
+      <p className="text-center text-xs leading-5 text-ink-600">
+        Times are campus time ({timezone}). Reference {booking.id}.
       </p>
     </div>
   );
