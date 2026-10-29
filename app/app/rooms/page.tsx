@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { StatusChip } from "@/components/badges";
+import { RoomSearchDateTimeFields } from "@/components/rooms/room-search-date-time-fields";
 import { requireCurrentProfile } from "@/lib/auth/session";
 import { getDatabase } from "@/lib/db/client";
 import {
@@ -12,6 +13,7 @@ import {
   toRoomSearchQuery,
 } from "@/lib/rooms/search";
 import type { RoomAvailabilityCode, RoomSummary } from "@/lib/rooms/types";
+import { campusToday } from "@/lib/time/campus-time";
 
 export const metadata: Metadata = {
   title: "Find a room",
@@ -248,53 +250,12 @@ export default async function RoomsPage({
           action="/app/rooms"
           className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-12"
         >
-          <div className="lg:col-span-2">
-            <label
-              htmlFor="date"
-              className="mb-1.5 block text-xs font-semibold text-ink-800"
-            >
-              Date
-            </label>
-            <input
-              id="date"
-              name="date"
-              type="date"
-              defaultValue={values.date}
-              className="field"
-            />
-          </div>
-          <div className="lg:col-span-2">
-            <label
-              htmlFor="start"
-              className="mb-1.5 block text-xs font-semibold text-ink-800"
-            >
-              Start
-            </label>
-            <input
-              id="start"
-              name="start"
-              type="time"
-              step="300"
-              defaultValue={values.startTime}
-              className="field"
-            />
-          </div>
-          <div className="lg:col-span-2">
-            <label
-              htmlFor="end"
-              className="mb-1.5 block text-xs font-semibold text-ink-800"
-            >
-              End
-            </label>
-            <input
-              id="end"
-              name="end"
-              type="time"
-              step="300"
-              defaultValue={values.endTime}
-              className="field"
-            />
-          </div>
+          <RoomSearchDateTimeFields
+            date={values.date}
+            startTime={values.startTime}
+            endTime={values.endTime}
+            today={campusToday()}
+          />
           <div className="lg:col-span-2">
             <label
               htmlFor="capacity"
@@ -366,7 +327,8 @@ export default async function RoomsPage({
         </form>
 
         <p className="mt-3 text-xs leading-5 text-ink-600">
-          Times are campus time.
+          Dates and times are campus-local. Times can be selected every 5
+          minutes; each room may have larger booking increments.
         </p>
       </section>
 

@@ -147,7 +147,10 @@ try {
   assert(studentRooms.status === 200, "The student could not load room discovery.");
   assert(
     studentRoomsHtml.includes("Find a room") &&
-      studentRoomsHtml.includes("Seminar Room 02"),
+      studentRoomsHtml.includes("Seminar Room 02") &&
+      studentRoomsHtml.includes("Choose a date") &&
+      studentRoomsHtml.includes("Start hour") &&
+      studentRoomsHtml.includes("End minute"),
     "Room discovery did not render the active room catalog.",
   );
 
@@ -288,6 +291,9 @@ try {
   assert(
     managerQueueHtml.includes("Media Studio 01") &&
       managerQueueHtml.includes("want this time") &&
+      managerQueueHtml.includes("Access log") &&
+      !managerQueueHtml.includes("Find a room") &&
+      !managerQueueHtml.includes("Tap simulator") &&
       !managerQueueHtml.includes("Seminar Room 02"),
     "The manager queue was not scoped to Priya's assigned rooms.",
   );

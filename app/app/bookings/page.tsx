@@ -34,8 +34,8 @@ export default async function MyBookingsPage() {
             My bookings
           </h1>
           <p className="mt-3 max-w-2xl text-base leading-7 text-ink-700">
-            Everything you&apos;ve asked for, upcoming first. Open one to see
-            the decision, cancel, or check out.
+            Everything you&apos;ve asked for, in date order from earliest to
+            latest. Open one to see the decision, cancel, or check out.
           </p>
         </div>
         <Link href="/app/rooms" className="btn-primary shrink-0">

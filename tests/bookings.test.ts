@@ -381,4 +381,13 @@ describe("booking request service", () => {
     );
     expect(managerList).toEqual([]);
   });
+
+  it("lists a requester's bookings in ascending start-date order", () => {
+    const bookings = listMyBookings(testDatabase.db, student);
+    const startTimes = bookings.map((booking) => Date.parse(booking.startAt));
+
+    expect(startTimes).toEqual([...startTimes].sort((left, right) => left - right));
+    expect(bookings[0]?.id).toBe("booking_incident_open");
+    expect(bookings.at(-1)?.id).toBe("booking_pending_seminar");
+  });
 });

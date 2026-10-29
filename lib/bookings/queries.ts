@@ -176,22 +176,14 @@ export function listMyBookings(
   profile: UserProfile,
   limit = 50,
 ): MyBooking[] {
-  const now = new Date().toISOString();
   const rows = db
     .prepare(
       `${BOOKING_SELECT}
        WHERE b.requester_id = ?
-       ORDER BY
-         CASE
-           WHEN b.status IN ('pending', 'waitlisted', 'approved', 'checked_in')
-            AND b.start_at >= ? THEN 0
-           ELSE 1
-         END,
-         b.start_at ASC,
-         b.updated_at DESC
+       ORDER BY b.start_at ASC, b.updated_at DESC, b.id ASC
        LIMIT ?`,
     )
-    .all(profile.id, now, Math.min(Math.max(limit, 1), 100)) as BookingRow[];
+    .all(profile.id, Math.min(Math.max(limit, 1), 100)) as BookingRow[];
 
   return rows.map(mapBooking);
 }
