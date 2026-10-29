@@ -34,7 +34,7 @@ export async function reviewIncidentAction(
       : "";
   const note =
     typeof formData.get("note") === "string" ? String(formData.get("note")) : "";
-  const result = reviewIncident(getDatabase(), profile, {
+  const result = await reviewIncident(getDatabase(), profile, {
     incidentId,
     note,
   });
@@ -84,7 +84,7 @@ export async function resolveIncidentAction(
     typeof formData.get("resolutionNote") === "string"
       ? String(formData.get("resolutionNote"))
       : "";
-  const result = resolveIncident(getDatabase(), profile, {
+  const result = await resolveIncident(getDatabase(), profile, {
     incidentId,
     resolutionNote,
   });

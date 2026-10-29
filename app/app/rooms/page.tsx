@@ -179,10 +179,10 @@ export default async function RoomsPage({
   const rawParams = await searchParams;
   const parsed = parseRoomSearchParams(rawParams);
   const db = getDatabase();
-  const filterOptions = getRoomFilterOptions(db);
+  const filterOptions = await getRoomFilterOptions(db);
 
   const rooms = parsed.ok
-    ? searchRooms(
+    ? await searchRooms(
         db,
         profile,
         {
@@ -194,7 +194,7 @@ export default async function RoomsPage({
         },
         parsed.interval,
       )
-    : searchRooms(
+    : await searchRooms(
         db,
         profile,
         { minCapacity: null, building: null, facilities: [] },

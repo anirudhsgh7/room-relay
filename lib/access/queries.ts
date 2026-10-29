@@ -111,18 +111,18 @@ function credentialLabel(
   };
 }
 
-export function getAccessSimulatorData(
+export async function getAccessSimulatorData(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): SimulatorData {
-  const credentialRows = db
+): Promise<SimulatorData> {
+  const credentialRows = (await db
     .prepare(
       `SELECT id, credential_type, credential_ref, active, revoked_at
        FROM credentials
        WHERE user_id = ?
        ORDER BY active DESC, created_at DESC`,
     )
-    .all(profile.id) as Array<{
+    .all(profile.id)) as Array<{
     id: string;
     credential_type: "nfc_uid" | "demo_token";
     credential_ref: string;
@@ -146,16 +146,16 @@ export function getAccessSimulatorData(
     };
   });
 
-  const rooms = db
+  const rooms = (await db
     .prepare(
       `SELECT id, code, name, building
        FROM rooms
        WHERE status = 'active'
        ORDER BY name, code`,
     )
-    .all() as RoomOption[];
+    .all()) as RoomOption[];
 
-  const accessWindows = db
+  const accessWindows = (await db
     .prepare(
       `SELECT
          b.id, b.room_id, b.start_at, b.end_at, b.status,
@@ -167,7 +167,7 @@ export function getAccessSimulatorData(
        ORDER BY b.start_at ASC
        LIMIT 12`,
     )
-    .all(profile.id) as Array<{
+    .all(profile.id)) as Array<{
     id: string;
     room_id: string;
     start_at: string;
@@ -266,11 +266,11 @@ function historyScope(actor: UserProfile): {
   return { sql: "event.actor_id = ?", parameters: [actor.id] };
 }
 
-export function listAccessHistory(
+export async function listAccessHistory(
   db: RoomRelayDatabase,
   actor: UserProfile,
   filters: AccessHistoryFilters,
-): AccessHistoryResult {
+): Promise<AccessHistoryResult> {
   if (!isActiveProfile(actor)) {
     return {
       items: [],
@@ -286,7 +286,7 @@ export function listAccessHistory(
   const parameters = [...scope.parameters];
 
   if (filters.roomCode) {
-    conditions.push("room.code = ? COLLATE NOCASE");
+    conditions.push("lower(room.code) = lower(?)");
     parameters.push(filters.roomCode);
   }
   if (filters.result !== "all") {
@@ -304,14 +304,14 @@ export function listAccessHistory(
   }
 
   const where = conditions.join(" AND ");
-  const countRow = db
+  const countRow = (await db
     .prepare(
       `SELECT count(*) AS count
        FROM access_events event
        JOIN rooms room ON room.id = event.room_id
        WHERE ${where}`,
     )
-    .get(...parameters) as { count: number };
+    .get(parameters)) as { count: number };
 
   const total = countRow.count;
   const page = Math.min(
@@ -320,7 +320,7 @@ export function listAccessHistory(
   );
   const offset = (page - 1) * PAGE_SIZE;
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT
          event.id, event.occurred_at, event.result, event.reason_code,
@@ -336,7 +336,7 @@ export function listAccessHistory(
        ORDER BY event.occurred_at DESC, event.id DESC
        LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
     )
-    .all(...parameters) as Array<{
+    .all(parameters)) as Array<{
     id: string;
     occurred_at: string;
     result: "allowed" | "denied";
@@ -351,7 +351,7 @@ export function listAccessHistory(
     credential_type: string | null;
   }>;
 
-  const roomRows = db
+  const roomRows = (await db
     .prepare(
       `SELECT DISTINCT room.code, room.name
        FROM access_events event
@@ -359,7 +359,7 @@ export function listAccessHistory(
        WHERE ${scope.sql}
        ORDER BY room.name`,
     )
-    .all(...scope.parameters) as AccessHistoryRoomOption[];
+    .all(scope.parameters)) as AccessHistoryRoomOption[];
 
   return {
     rooms: roomRows,

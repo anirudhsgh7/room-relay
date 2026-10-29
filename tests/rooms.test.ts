@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { getRoomDetail, searchRooms, getRoomFilterOptions } from "@/lib/rooms/queries";
 import { parseRoomSearchParams } from "@/lib/rooms/search";
 import { parseCampusInterval } from "@/lib/time/campus-time";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -17,25 +17,25 @@ function interval(date: string, start: string, end: string) {
 
 describe("room discovery queries", () => {
   let testDatabase: SeededTestDatabase;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
+  let student: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase();
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
   });
 
   afterEach(() => {
     testDatabase.cleanup();
   });
 
-  it("returns active rooms and filter options only", () => {
-    const rooms = searchRooms(
+  it("returns active rooms and filter options only", async () => {
+    const rooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: null, facilities: [] },
       null,
     );
-    const options = getRoomFilterOptions(testDatabase.db);
+    const options = await getRoomFilterOptions(testDatabase.db);
 
     expect(rooms.map((room) => room.code).sort()).toEqual([
       "LIB-03",
@@ -54,20 +54,20 @@ describe("room discovery queries", () => {
     );
   });
 
-  it("applies capacity, building, and AND-style facility filters", () => {
-    const capacityRooms = searchRooms(
+  it("applies capacity, building, and AND-style facility filters", async () => {
+    const capacityRooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: 20, building: null, facilities: [] },
       null,
     );
-    const buildingRooms = searchRooms(
+    const buildingRooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: "Arts Annex", facilities: [] },
       null,
     );
-    const facilityRooms = searchRooms(
+    const facilityRooms = await searchRooms(
       testDatabase.db,
       student,
       {
@@ -83,12 +83,12 @@ describe("room discovery queries", () => {
     expect(facilityRooms.map((room) => room.code)).toEqual(["SEM-02"]);
   });
 
-  it("marks a confirmed booking as a conflict without leaking its details", () => {
-    const approved = testDatabase.db
+  it("marks a confirmed booking as a conflict without leaking its details", async () => {
+    const approved = (await testDatabase.db
       .prepare(
         "SELECT start_at, end_at FROM bookings WHERE id = 'booking_approved_seminar'",
       )
-      .get() as { start_at: string; end_at: string };
+      .get()) as { start_at: string; end_at: string };
     const approvedInterval = interval(
       "2026-10-29",
       "16:00",
@@ -99,7 +99,7 @@ describe("room discovery queries", () => {
       Date.parse(approvedInterval.startUtc),
     );
 
-    const rooms = searchRooms(
+    const rooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: null, facilities: [] },
@@ -112,20 +112,20 @@ describe("room discovery queries", () => {
     expect(JSON.stringify(seminar)).not.toContain("booking_approved_seminar");
   });
 
-  it("applies a room's turnaround buffer after a confirmed booking", () => {
-    testDatabase.db
+  it("applies a room's turnaround buffer after a confirmed booking", async () => {
+    await testDatabase.db
       .prepare(
         "UPDATE room_booking_policies SET buffer_minutes = 15 WHERE room_id = 'room_seminar_02'",
       )
       .run();
 
-    const closeToEnd = searchRooms(
+    const closeToEnd = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: "Hazelwood Hall", facilities: [] },
       interval("2026-10-29", "17:30", "18:30"),
     );
-    const afterBuffer = searchRooms(
+    const afterBuffer = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: "Hazelwood Hall", facilities: [] },
@@ -136,8 +136,8 @@ describe("room discovery queries", () => {
     expect(afterBuffer[0]?.availability).toBe("available");
   });
 
-  it("marks intervals that violate the room's time policy", () => {
-    const rooms = searchRooms(
+  it("marks intervals that violate the room's time policy", async () => {
+    const rooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: "Hazelwood Hall", facilities: [] },
@@ -147,8 +147,8 @@ describe("room discovery queries", () => {
     expect(rooms[0]?.availability).toBe("invalid_time");
   });
 
-  it("marks rooms as outside hours for an out-of-schedule interval", () => {
-    const rooms = searchRooms(
+  it("marks rooms as outside hours for an out-of-schedule interval", async () => {
+    const rooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: null, facilities: [] },
@@ -158,9 +158,9 @@ describe("room discovery queries", () => {
     expect(rooms.every((room) => room.availability === "outside_hours")).toBe(true);
   });
 
-  it("shows room requirements and the student's verification state", () => {
-    const seminar = getRoomDetail(testDatabase.db, student, "SEM-02", null);
-    const media = getRoomDetail(testDatabase.db, student, "MED-01", null);
+  it("shows room requirements and the student's verification state", async () => {
+    const seminar = await getRoomDetail(testDatabase.db, student, "SEM-02", null);
+    const media = await getRoomDetail(testDatabase.db, student, "MED-01", null);
 
     expect(seminar?.requirements[0]?.verification).toBe("verified");
     expect(seminar?.hasUnverifiedRequiredRequirement).toBe(false);
@@ -168,26 +168,26 @@ describe("room discovery queries", () => {
     expect(media?.hasUnverifiedRequiredRequirement).toBe(true);
   });
 
-  it("does not expose student verification state to a manager", () => {
-    const manager = getProfileById(testDatabase.db, "usr_marcus_webb")!;
-    const media = getRoomDetail(testDatabase.db, manager, "MED-01", null);
+  it("does not expose student verification state to a manager", async () => {
+    const manager = await getTestProfile(testDatabase.db, "usr_marcus_webb");
+    const media = await getRoomDetail(testDatabase.db, manager, "MED-01", null);
 
     expect(media?.requirements[0]?.verification).toBeNull();
     expect(media?.hasUnverifiedRequiredRequirement).toBe(false);
   });
 
-  it("does not return inactive rooms through a guessed code", () => {
-    expect(getRoomDetail(testDatabase.db, student, "ARC-B1", null)).toBeNull();
+  it("does not return inactive rooms through a guessed code", async () => {
+    expect(await getRoomDetail(testDatabase.db, student, "ARC-B1", null)).toBeNull();
   });
 
-  it("labels active rooms with requests disabled as not requestable", () => {
-    testDatabase.db
+  it("labels active rooms with requests disabled as not requestable", async () => {
+    await testDatabase.db
       .prepare(
         "UPDATE room_booking_policies SET requests_enabled = 0 WHERE room_id = 'room_library_quiet'",
       )
       .run();
 
-    const rooms = searchRooms(
+    const rooms = await searchRooms(
       testDatabase.db,
       student,
       { minCapacity: null, building: "Central Library", facilities: [] },
@@ -197,7 +197,7 @@ describe("room discovery queries", () => {
     expect(rooms[0]?.availability).toBe("not_requestable");
   });
 
-  it("validates and parses allowlisted discovery query parameters", () => {
+  it("validates and parses allowlisted discovery query parameters", async () => {
     const parsed = parseRoomSearchParams({
       date: "2026-10-29",
       start: "10:00",

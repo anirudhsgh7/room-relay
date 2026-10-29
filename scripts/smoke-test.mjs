@@ -75,7 +75,10 @@ try {
   assert(health.status === "ok", "Health check did not report ok.");
   assert(health.phase === 6, "Health check did not report the Phase 6 service.");
   assert(health.database === "ok", "Health check did not report a healthy database.");
-  assert(health.migrations === 6, "The Phase 6 migration was not reported as applied.");
+  assert(
+    Number(health.migrations) >= 1,
+    "The Postgres schema migration was not reported as applied.",
+  );
 
   const loginResponse = await fetch(`${baseUrl}/login`);
   assert(loginResponse.status === 200, "The login page did not return 200.");

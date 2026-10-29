@@ -8,37 +8,30 @@ const fixedNow = new Date("2026-10-28T12:00:00.000Z");
 describe("database migrations and seed data", () => {
   let testDatabase: TestDatabase;
 
-  beforeEach(() => {
-    testDatabase = createTestDatabase();
+  beforeEach(async () => {
+    testDatabase = await createTestDatabase();
   });
 
   afterEach(() => {
     testDatabase.cleanup();
   });
 
-  it("applies migrations once and records the schema version", () => {
-    const secondRun = runMigrations(testDatabase.db);
-    const migrations = testDatabase.db
+  it("applies migrations once and records the Postgres schema version", async () => {
+    const secondRun = await runMigrations(testDatabase.db);
+    const migrations = (await testDatabase.db
       .prepare("SELECT name FROM schema_migrations ORDER BY name")
-      .all() as Array<{ name: string }>;
+      .all()) as Array<{ name: string }>;
 
     expect(secondRun).toEqual([]);
-    expect(migrations).toEqual([
-      { name: "001_initial.sql" },
-      { name: "002_phase2_requests.sql" },
-      { name: "003_phase3_manager_review.sql" },
-      { name: "004_phase4_access_policy.sql" },
-      { name: "005_phase5_closeout.sql" },
-      { name: "006_operations.sql" },
-    ]);
+    expect(migrations).toEqual([{ name: "001_initial.sql" }]);
   });
 
-  it("creates the complete lifecycle schema with foreign keys enabled", () => {
-    const tables = testDatabase.db
+  it("creates the complete lifecycle schema", async () => {
+    const tables = (await testDatabase.db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+        "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
       )
-      .all() as Array<{ name: string }>;
+      .all()) as Array<{ name: string }>;
     const names = tables.map((table) => table.name);
 
     expect(names).toEqual(
@@ -55,10 +48,11 @@ describe("database migrations and seed data", () => {
         "audit_events",
         "condition_reports",
         "incidents",
+        "room_blackouts",
+        "notifications",
         "schema_migrations",
       ]),
     );
-    expect(testDatabase.db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
   it("seeds the demo dataset idempotently", async () => {
@@ -81,15 +75,15 @@ describe("database migrations and seed data", () => {
       incidents: 2,
     });
 
-    const roomWindows = testDatabase.db
+    const roomWindows = (await testDatabase.db
       .prepare(
-        `SELECT r.code, count(a.id) AS rule_count
+        `SELECT r.code, count(a.id)::int AS rule_count
          FROM rooms r
          LEFT JOIN availability_rules a ON a.room_id = r.id
-         GROUP BY r.id
+         GROUP BY r.id, r.code
          ORDER BY r.code`,
       )
-      .all() as Array<{ code: string; rule_count: number }>;
+      .all()) as Array<{ code: string; rule_count: number }>;
 
     expect(roomWindows).toEqual([
       { code: "ARC-B1", rule_count: 0 },
@@ -103,14 +97,14 @@ describe("database migrations and seed data", () => {
   it("assigns the two manager accounts to different room portfolios", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    const rooms = testDatabase.db
+    const rooms = (await testDatabase.db
       .prepare(
         `SELECT r.code, p.email
          FROM rooms r
          JOIN profiles p ON p.id = r.manager_id
          ORDER BY r.code`,
       )
-      .all() as Array<{ code: string; email: string }>;
+      .all()) as Array<{ code: string; email: string }>;
 
     expect(rooms).toEqual([
       { code: "ARC-B1", email: "manager@roomrelay.demo" },
@@ -124,21 +118,21 @@ describe("database migrations and seed data", () => {
   it("enforces role, ownership, and time constraints", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare("UPDATE profiles SET role = 'owner' WHERE id = 'usr_amelia_chen'")
         .run(),
-    ).toThrow(/CHECK constraint failed/i);
+    ).rejects.toThrow(/check constraint/i);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE rooms SET manager_id = 'usr_amelia_chen' WHERE id = 'room_seminar_02'",
         )
         .run(),
-    ).toThrow(/room manager must have the manager role/i);
+    ).rejects.toThrow(/room manager must have the manager role/i);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           `INSERT INTO bookings (
@@ -152,19 +146,19 @@ describe("database migrations and seed data", () => {
            )`,
         )
         .run(),
-    ).toThrow(/CHECK constraint failed/i);
+    ).rejects.toThrow(/check constraint/i);
   });
 
   it("prevents overlapping confirmed bookings at the database boundary", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    const approved = testDatabase.db
+    const approved = (await testDatabase.db
       .prepare(
         "SELECT start_at, end_at FROM bookings WHERE id = 'booking_approved_seminar'",
       )
-      .get() as { start_at: string; end_at: string };
+      .get()) as { start_at: string; end_at: string };
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           `INSERT INTO bookings (
@@ -179,10 +173,10 @@ describe("database migrations and seed data", () => {
              'Test confirmed overlap metadata.'
            )`,
         )
-        .run(approved.start_at, approved.end_at),
-    ).toThrow(/CONFIRMED_BOOKING_OVERLAP/);
+        .run([approved.start_at, approved.end_at]),
+    ).rejects.toThrow(/CONFIRMED_BOOKING_OVERLAP/);
 
-    const pending = testDatabase.db
+    const pending = await testDatabase.db
       .prepare(
         `INSERT INTO bookings (
            id, room_id, requester_id, purpose, expected_attendance,
@@ -193,10 +187,10 @@ describe("database migrations and seed data", () => {
            '2026-10-28T12:00:00.000Z', '2026-10-28T12:00:00.000Z'
          )`,
       )
-      .run(approved.start_at, approved.end_at);
+      .run([approved.start_at, approved.end_at]);
 
     expect(pending.changes).toBe(1);
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           `UPDATE bookings
@@ -207,9 +201,9 @@ describe("database migrations and seed data", () => {
            WHERE id = 'booking_pending_to_approve'`,
         )
         .run(),
-    ).toThrow(/CONFIRMED_BOOKING_OVERLAP/);
+    ).rejects.toThrow(/CONFIRMED_BOOKING_OVERLAP/);
 
-    testDatabase.db
+    await testDatabase.db
       .prepare(
         "UPDATE room_booking_policies SET buffer_minutes = 15 WHERE room_id = 'room_seminar_02'",
       )
@@ -222,7 +216,7 @@ describe("database migrations and seed data", () => {
       Date.parse(approved.end_at) + 70 * 60_000,
     ).toISOString();
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           `INSERT INTO bookings (
@@ -237,22 +231,22 @@ describe("database migrations and seed data", () => {
              'Test buffer overlap metadata.'
            )`,
         )
-        .run(insideBufferStart, insideBufferEnd),
-    ).toThrow(/CONFIRMED_BOOKING_OVERLAP/);
+        .run([insideBufferStart, insideBufferEnd]),
+    ).rejects.toThrow(/CONFIRMED_BOOKING_OVERLAP/);
   });
 
   it("requires trusted decision and cancellation metadata at the database boundary", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE bookings SET status = 'approved' WHERE id = 'booking_pending_media'",
         )
         .run(),
-    ).toThrow(/INVALID_DECISION_METADATA/);
+    ).rejects.toThrow(/INVALID_DECISION_METADATA/);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           `UPDATE bookings
@@ -263,35 +257,33 @@ describe("database migrations and seed data", () => {
            WHERE id = 'booking_pending_seminar'`,
         )
         .run(),
-    ).toThrow(/INVALID_DECISION_METADATA/);
+    ).rejects.toThrow(/INVALID_DECISION_METADATA/);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE bookings SET status = 'cancelled' WHERE id = 'booking_pending_media'",
         )
         .run(),
-    ).toThrow(/INVALID_CANCELLATION_METADATA/);
+    ).rejects.toThrow(/INVALID_CANCELLATION_METADATA/);
   });
 
   it("permits approved to checked_in but rejects unsupported later transitions", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    expect(() =>
-      testDatabase.db
-        .prepare(
-          "UPDATE bookings SET status = 'checked_in' WHERE id = 'booking_demo_active_classroom'",
-        )
-        .run(),
-    ).not.toThrow();
+    await testDatabase.db
+      .prepare(
+        "UPDATE bookings SET status = 'checked_in' WHERE id = 'booking_demo_active_classroom'",
+      )
+      .run();
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE bookings SET status = 'completed' WHERE id = 'booking_demo_active_classroom'",
         )
         .run(),
-    ).toThrow(
+    ).rejects.toThrow(
       /INVALID_BOOKING_TRANSITION|CHECKOUT_REPORT_REQUIRED|CHECKOUT_TIME_REQUIRED|CLOSE_TIME_REQUIRED/,
     );
   });
@@ -299,32 +291,32 @@ describe("database migrations and seed data", () => {
   it("keeps access and audit history append-only", async () => {
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE access_events SET reason_code = 'TAMPERED' WHERE id = 'access_completed_allowed'",
         )
         .run(),
-    ).toThrow(/append-only/i);
+    ).rejects.toThrow(/append-only/i);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare("DELETE FROM access_events WHERE id = 'access_completed_allowed'")
         .run(),
-    ).toThrow(/append-only/i);
+    ).rejects.toThrow(/append-only/i);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare(
           "UPDATE audit_events SET summary = 'Tampered history' WHERE id = 'audit_access_allowed'",
         )
         .run(),
-    ).toThrow(/append-only/i);
+    ).rejects.toThrow(/append-only/i);
 
-    expect(() =>
+    await expect(
       testDatabase.db
         .prepare("DELETE FROM audit_events WHERE id = 'audit_access_allowed'")
         .run(),
-    ).toThrow(/append-only/i);
+    ).rejects.toThrow(/append-only/i);
   });
 });

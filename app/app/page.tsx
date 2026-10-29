@@ -91,7 +91,7 @@ export default async function HomePage() {
     month: "long",
   }).format(now);
   const firstName = profile.displayName.split(/\s+/)[0];
-  const recent = listNotifications(db, profile, { limit: 4 });
+  const recent = await listNotifications(db, profile, { limit: 4 });
 
   const header = (
     <header>
@@ -118,7 +118,7 @@ export default async function HomePage() {
     ) : null;
 
   if (profile.role === "student") {
-    const home = getStudentHome(db, profile);
+    const home = await getStudentHome(db, profile);
 
     return (
       <div className="space-y-8">
@@ -183,7 +183,7 @@ export default async function HomePage() {
     );
   }
 
-  const home = getStaffHome(db, profile);
+  const home = await getStaffHome(db, profile);
   const decideCount = home.stats[0]?.value ?? 0;
 
   return (

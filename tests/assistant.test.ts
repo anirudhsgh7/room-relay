@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseQuery, type ParseContext } from "@/lib/assistant/parse";
 import { answerAssistant } from "@/lib/assistant/respond";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { decideBooking } from "@/lib/bookings/decisions";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
-type Profile = NonNullable<ReturnType<typeof getProfileById>>;
+type Profile = UserProfile;
 
 const fixedNow = new Date("2026-10-28T12:00:00.000Z");
 
@@ -57,18 +57,18 @@ describe("assistant message parser", () => {
     }
   });
 
-  it("reads a lunchtime slot", () => {
+  it("reads a lunchtime slot", async () => {
     expect(parse("tomorrow at lunchtime")).toMatchObject({ startTime: "12:00", endTime: "13:00" });
   });
 
-  it("reads group size without confusing it with a duration or a time", () => {
+  it("reads group size without confusing it with a duration or a time", async () => {
     expect(parse("a room for 12 people tomorrow").capacity).toBe(12);
     expect(parse("group of 6 at 2pm").capacity).toBe(6);
     expect(parse("for 2 hours tomorrow at 10am")).toMatchObject({ capacity: null, durationMinutes: 120 });
     expect(parse("for 8 at 10:30")).toMatchObject({ capacity: 8, startTime: "10:30" });
   });
 
-  it("matches facilities by name and by everyday words", () => {
+  it("matches facilities by name and by everyday words", async () => {
     expect(parse("somewhere with a projector and a whiteboard").facilities.sort()).toEqual([
       "Projector",
       "Whiteboard",
@@ -77,20 +77,20 @@ describe("assistant message parser", () => {
     expect(parse("we want to film an interview").facilities).toEqual(["Camera rig"]);
   });
 
-  it("recognises buildings and rooms by code or name", () => {
+  it("recognises buildings and rooms by code or name", async () => {
     expect(parse("anything in hazelwood tomorrow").building).toBe("Hazelwood Hall");
     expect(parse("is sem-02 free friday at 2").roomCode).toBe("SEM-02");
     expect(parse("is SEM 02 free").roomCode).toBe("SEM-02");
     expect(parse("tell me about the media studio").roomCode).toBe("MED-01");
   });
 
-  it("does not read dates or room codes as times", () => {
+  it("does not read dates or room codes as times", async () => {
     expect(parse("2026-11-02").startTime).toBeNull();
     expect(parse("is sem-02 free").startTime).toBeNull();
     expect(parse("30/10").startTime).toBeNull();
   });
 
-  it("leaves unknown values empty instead of guessing", () => {
+  it("leaves unknown values empty instead of guessing", async () => {
     expect(parse("I need a space")).toMatchObject({
       date: null,
       startTime: null,
@@ -112,9 +112,9 @@ describe("assistant answers", () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
-    amelia = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-    priya = getProfileById(testDatabase.db, "usr_priya_nair")!;
-    admin = getProfileById(testDatabase.db, "usr_rowan_ellis")!;
+    amelia = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+    priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
+    admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
   });
 
   afterEach(() => {
@@ -122,8 +122,8 @@ describe("assistant answers", () => {
     testDatabase.cleanup();
   });
 
-  it("finds free rooms and links straight to a prefilled request", () => {
-    const answer = answerAssistant(
+  it("finds free rooms and links straight to a prefilled request", async () => {
+    const answer = await answerAssistant(
       testDatabase.db,
       amelia,
       "find a room for 12 people tomorrow 10-11am with a projector",
@@ -138,24 +138,24 @@ describe("assistant answers", () => {
     });
   });
 
-  it("explains a booked time and offers the waitlist instead of inventing availability", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "is SEM-02 free tomorrow 4-5pm?");
+  it("explains a booked time and offers the waitlist instead of inventing availability", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "is SEM-02 free tomorrow 4-5pm?");
 
     expect(answer.message).toContain("already booked");
     expect(answer.message).toContain("waitlist");
     expect(answer.cards[0]).toMatchObject({ badge: "Booked", cta: "Join waitlist" });
   });
 
-  it("asks for the missing piece and suggests complete questions", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "I need a room for 6 people");
+  it("asks for the missing piece and suggests complete questions", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "I need a room for 6 people");
 
     expect(answer.message).toContain("Tell me a day and time");
     expect(answer.suggestions[0]).toBe("Find a room for 6 people tomorrow at 10am");
     expect(answer.cards.length).toBeGreaterThan(0);
   });
 
-  it("summarises a student's own bookings with waitlist positions", () => {
-    decideBooking(testDatabase.db, priya, {
+  it("summarises a student's own bookings with waitlist positions", async () => {
+    await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_media_overlap",
       action: "approve",
       decisionReason: "Approving Noah to test the waitlist summary.",
@@ -164,44 +164,44 @@ describe("assistant answers", () => {
       allocationExceptionReason: "Film Society deadline is fixed by the festival committee.",
     });
 
-    const answer = answerAssistant(testDatabase.db, amelia, "show my bookings");
+    const answer = await answerAssistant(testDatabase.db, amelia, "show my bookings");
 
     expect(answer.message).toContain("on a waitlist");
     const waitlisted = answer.cards.find((card) => card.badge === "Waitlisted");
     expect(waitlisted?.detail).toBe("Number 1 on the waitlist");
   });
 
-  it("answers rule questions from the room's published policy", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "how are requests ranked for SEM-02?");
+  it("answers rule questions from the room's published policy", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "how are requests ranked for SEM-02?");
 
     expect(answer.message).toContain('Seminar Room 02 uses "First come, first served"');
   });
 
-  it("treats 'how do I cancel my booking' as a question, not a status request", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "how do I cancel my booking?");
+  it("treats 'how do I cancel my booking' as a question, not a status request", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "how do I cancel my booking?");
 
     expect(answer.message).toContain("choose Cancel");
   });
 
-  it("gives managers their own queue and admins the whole campus", () => {
-    const priyaView = answerAssistant(testDatabase.db, priya, "what needs my attention?");
-    const adminView = answerAssistant(testDatabase.db, admin, "what needs my attention?");
+  it("gives managers their own queue and admins the whole campus", async () => {
+    const priyaView = await answerAssistant(testDatabase.db, priya, "what needs my attention?");
+    const adminView = await answerAssistant(testDatabase.db, admin, "what needs my attention?");
 
     expect(priyaView.message).toContain("2 requests are waiting for a decision");
     expect(adminView.message).toContain("3 requests are waiting for a decision");
     expect(priyaView.cards.every((card) => !card.title.includes("Seminar"))).toBe(true);
   });
 
-  it("never offers students a request link for rooms that cannot take one", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "find a room tomorrow at 7am");
+  it("never offers students a request link for rooms that cannot take one", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "find a room tomorrow at 7am");
 
     for (const card of answer.cards) {
       expect(card.cta).not.toBe("Request");
     }
   });
 
-  it("explains competing requests in everyday words", () => {
-    const answer = answerAssistant(
+  it("explains competing requests in everyday words", async () => {
+    const answer = await answerAssistant(
       testDatabase.db,
       amelia,
       "what happens if someone else wants the same time?",
@@ -210,33 +210,33 @@ describe("assistant answers", () => {
     expect(answer.message).toContain("ranks them by its published rule");
   });
 
-  it("snaps off-grid times to bookable suggestions", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "find a room tomorrow 3:10-4pm");
+  it("snaps off-grid times to bookable suggestions", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "find a room tomorrow 3:10-4pm");
 
     expect(answer.message).toContain("30-minute steps");
     expect(answer.suggestions).toEqual([
       "Find a room on 29 Oct 15:00-16:00",
       "Find a room on 29 Oct 15:30-16:30",
     ]);
-    const followUp = answerAssistant(testDatabase.db, amelia, answer.suggestions[0]!);
+    const followUp = await answerAssistant(testDatabase.db, amelia, answer.suggestions[0]!);
     expect(followUp.message).toContain("free for");
   });
 
-  it("states the largest room when a group is too big", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "find a room for 50 people tomorrow at 2");
+  it("states the largest room when a group is too big", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "find a room for 50 people tomorrow at 2");
 
     expect(answer.message).toBe("No room seats 50. The largest seats 40.");
   });
 
-  it("puts a booking that has started first and points to check-in", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "my requests");
+  it("puts a booking that has started first and points to check-in", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "my requests");
 
     expect(answer.message).toContain("Your Classroom 14 booking has started");
     expect(answer.cards[0]).toMatchObject({ title: "Classroom 14", cta: "Check in", href: "/app/access" });
   });
 
-  it("falls back with suggestions when it does not understand", () => {
-    const answer = answerAssistant(testDatabase.db, amelia, "banana");
+  it("falls back with suggestions when it does not understand", async () => {
+    const answer = await answerAssistant(testDatabase.db, amelia, "banana");
 
     expect(answer.message).toContain("not sure I understood");
     expect(answer.suggestions.length).toBeGreaterThan(0);

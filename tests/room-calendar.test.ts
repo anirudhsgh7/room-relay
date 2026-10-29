@@ -8,7 +8,7 @@ import {
 } from "@/lib/rooms/calendar";
 
 describe("room search calendar dates", () => {
-  it("builds a Monday-first grid with adjacent-month dates", () => {
+  it("builds a Monday-first grid with adjacent-month dates", async () => {
     const cells = getCalendarDateCells(2026, 11);
 
     expect(cells).toHaveLength(42);
@@ -29,7 +29,7 @@ describe("room search calendar dates", () => {
     });
   });
 
-  it("handles leap days, date shifts, and month boundaries", () => {
+  it("handles leap days, date shifts, and month boundaries", async () => {
     const february = getCalendarDateCells(2028, 2);
 
     expect(february.find((cell) => cell.date === "2028-02-29")).toMatchObject({
@@ -40,7 +40,7 @@ describe("room search calendar dates", () => {
     expect(shiftCalendarMonth(2027, 1, -1)).toEqual({ year: 2026, month: 12 });
   });
 
-  it("validates and formats dates without using the device timezone", () => {
+  it("validates and formats dates without using the device timezone", async () => {
     expect(parseCalendarDate("2026-11-30")).toEqual({ year: 2026, month: 11 });
     expect(parseCalendarDate("2026-02-30")).toBeNull();
     expect(formatCalendarDate("2026-10-30")).toBe("Fri, 30 Oct 2026");

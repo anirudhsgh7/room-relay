@@ -49,14 +49,14 @@ export default async function RoomSettingsPage({
   const { id } = await params;
   const query = await searchParams;
   const db = getDatabase();
-  const access = getAdminRoom(db, profile, id);
+  const access = await getAdminRoom(db, profile, id);
 
   if (!access) {
     notFound();
   }
 
   const { room, permissions } = access;
-  const managers = listAssignableManagers(db);
+  const managers = await listAssignableManagers(db);
   const sections = [
     { id: "details", label: "Details" },
     { id: "hours", label: "Opening hours" },

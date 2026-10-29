@@ -44,7 +44,7 @@ describe("session tokens", () => {
     await expect(verifySessionToken(token)).resolves.toBeNull();
   });
 
-  it("uses hardened cookie defaults", () => {
+  it("uses hardened cookie defaults", async () => {
     expect(SESSION_COOKIE_NAME).toBe("roomrelay_session");
     expect(sessionCookieOptions()).toMatchObject({
       httpOnly: true,

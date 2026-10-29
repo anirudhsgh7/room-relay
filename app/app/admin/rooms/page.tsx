@@ -18,7 +18,7 @@ export default async function AdminRoomsPage() {
     notFound();
   }
 
-  const rooms = listAdminRooms(getDatabase(), profile);
+  const rooms = await listAdminRooms(getDatabase(), profile);
   const isAdmin = profile.role === "admin";
 
   return (

@@ -1,33 +1,26 @@
-import { existsSync, unlinkSync } from "node:fs";
 import "./load-env";
-import { getDatabasePath } from "@/lib/config";
+import { getDatabaseUrl } from "@/lib/config";
+import { openDatabase } from "@/lib/db/client";
 
-if (
-  process.env.NODE_ENV === "production" &&
-  process.env.ROOMRELAY_ALLOW_DB_RESET !== "1"
-) {
-  throw new Error(
-    "Refusing to reset a production database. Set ROOMRELAY_ALLOW_DB_RESET=1 only if you are certain.",
-  );
-}
+async function main(): Promise<void> {
+  if (process.env.ROOMRELAY_ALLOW_DB_RESET !== "1") {
+    throw new Error(
+      "Refusing to reset a Postgres database. Set ROOMRELAY_ALLOW_DB_RESET=1 only when you are certain this is a disposable database.",
+    );
+  }
 
-const databasePath = getDatabasePath();
+  const db = openDatabase(getDatabaseUrl());
 
-if (databasePath === ":memory:" || databasePath.includes("://")) {
-  throw new Error(
-    `The configured database path cannot be reset by this script: ${databasePath}`,
-  );
-}
-
-for (const candidate of [
-  databasePath,
-  `${databasePath}-shm`,
-  `${databasePath}-wal`,
-]) {
-  if (existsSync(candidate)) {
-    unlinkSync(candidate);
-    console.log(`Removed ${candidate}`);
+  try {
+    await db.exec("DROP SCHEMA IF EXISTS public CASCADE");
+    await db.exec("CREATE SCHEMA public");
+    console.log("Database schema reset. Run `npm run db:setup` to recreate it.");
+  } finally {
+    await db.close();
   }
 }
 
-console.log("Database reset complete. Run `npm run db:setup` to recreate it.");
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

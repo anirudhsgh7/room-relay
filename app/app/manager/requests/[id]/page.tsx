@@ -77,13 +77,13 @@ export default async function ManagerRequestPage({
 
   const { id } = await params;
   const db = getDatabase();
-  const request = getManagerRequest(db, profile, id);
+  const request = await getManagerRequest(db, profile, id);
 
   if (!request) {
     notFound();
   }
 
-  const timeline = getBookingTimeline(db, profile, request.id);
+  const timeline = await getBookingTimeline(db, profile, request.id);
   const query = await searchParams;
   const decisionResult = query.decision;
   const movedToWaitlist = Number(query.waitlisted ?? 0) || 0;
@@ -91,7 +91,7 @@ export default async function ManagerRequestPage({
   const promoted = Number(query.promoted ?? 0) || 0;
   const standing =
     request.status === "pending" || request.status === "waitlisted"
-      ? getAllocationStanding(db, request.id, [request.status])
+      ? await getAllocationStanding(db, request.id, [request.status])
       : null;
   const rule = ALLOCATION_RULE_COPY[request.room.policy.allocationRule];
   const timezone = getCampusTimezone();

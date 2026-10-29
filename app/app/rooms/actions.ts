@@ -49,7 +49,7 @@ export async function submitBookingRequestAction(
     acknowledgement: formString(formData, "acknowledgement"),
   };
 
-  const result = submitBookingRequest(getDatabase(), profile, {
+  const result = await submitBookingRequest(getDatabase(), profile, {
     roomCode: formString(formData, "roomCode"),
     ...values,
     idempotencyKey: formString(formData, "idempotencyKey"),

@@ -9,10 +9,26 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: roomrelay
+          POSTGRES_PASSWORD: roomrelay_test
+          POSTGRES_DB: roomrelay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U roomrelay -d roomrelay_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       ROOMRELAY_SESSION_SECRET: ci-only-session-secret-roomrelay-0123456789abcdef
-      ROOMRELAY_DB_PATH: ./data/ci-room-relay.db
       ROOMRELAY_CAMPUS_TIMEZONE: Europe/London
+      DATABASE_URL: postgresql://roomrelay:roomrelay_test@127.0.0.1:5432/roomrelay_test
+      DATABASE_URL_UNPOOLED: postgresql://roomrelay:roomrelay_test@127.0.0.1:5432/roomrelay_test
+      TEST_DATABASE_URL: postgresql://roomrelay:roomrelay_test@127.0.0.1:5432/roomrelay_test
 
     steps:
       - name: Check out repository

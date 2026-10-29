@@ -61,13 +61,13 @@ export async function authenticateWithPassword(
   password: string,
 ): Promise<UserProfile | null> {
   const normalizedEmail = email.trim().toLowerCase();
-  const row = db
+  const row = (await db
     .prepare(
       `SELECT id, email, display_name, role, status, password_hash, created_at, updated_at
        FROM profiles
-       WHERE email = ? COLLATE NOCASE`,
+       WHERE lower(email) = lower(?)`,
     )
-    .get(normalizedEmail) as ProfileRow | undefined;
+    .get(normalizedEmail)) as ProfileRow | undefined;
 
   if (!row) {
     await burnPasswordComparison(password);
@@ -83,17 +83,17 @@ export async function authenticateWithPassword(
   return toProfile(row);
 }
 
-export function getProfileById(
+export async function getProfileById(
   db: RoomRelayDatabase,
   userId: string,
-): UserProfile | null {
-  const row = db
+): Promise<UserProfile | null> {
+  const row = (await db
     .prepare(
       `SELECT id, email, display_name, role, status, created_at, updated_at
        FROM profiles
        WHERE id = ?`,
     )
-    .get(userId) as PublicProfileRow | undefined;
+    .get(userId)) as PublicProfileRow | undefined;
 
   if (!row || row.status !== "active") {
     return null;

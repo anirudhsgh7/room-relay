@@ -37,7 +37,7 @@ export async function cancelBookingAction(
       ? String(formData.get("cancellationReason"))
       : "";
 
-  const result = cancelOwnBooking(getDatabase(), profile, {
+  const result = await cancelOwnBooking(getDatabase(), profile, {
     bookingId,
     reason,
   });
@@ -77,7 +77,7 @@ export async function checkOutBookingAction(
 
   const field = (name: string) =>
     typeof formData.get(name) === "string" ? String(formData.get(name)) : "";
-  const result = checkOutBooking(getDatabase(), profile, {
+  const result = await checkOutBooking(getDatabase(), profile, {
     bookingId: field("bookingId"),
     conditionState: field("conditionState") as
       | "left_as_found"

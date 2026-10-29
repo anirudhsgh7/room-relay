@@ -38,7 +38,7 @@ const managedRoom = { id: "room-a", managerId: "manager" };
 const otherRoom = { id: "room-b", managerId: "other-manager" };
 
 describe("authorization matrix", () => {
-  it("allows only an assigned manager or admin to manage a room", () => {
+  it("allows only an assigned manager or admin to manage a room", async () => {
     expect(canManageRoom(manager, managedRoom)).toBe(true);
     expect(canManageRoom(manager, otherRoom)).toBe(false);
     expect(canManageRoom(otherManager, otherRoom)).toBe(true);
@@ -46,14 +46,14 @@ describe("authorization matrix", () => {
     expect(canManageRoom(admin, otherRoom)).toBe(true);
   });
 
-  it("rejects a suspended profile even if the stored role is admin", () => {
+  it("rejects a suspended profile even if the stored role is admin", async () => {
     expect(isActiveProfile(suspendedAdmin)).toBe(false);
     expect(canManageRoom(suspendedAdmin, managedRoom)).toBe(false);
     expect(canViewInstitutionAudit(suspendedAdmin)).toBe(false);
     expect(() => requireAdmin(suspendedAdmin)).toThrow("FORBIDDEN_ADMIN_ONLY");
   });
 
-  it("scopes approval and policy actions to room ownership", () => {
+  it("scopes approval and policy actions to room ownership", async () => {
     expect(canApproveOrRejectBooking(manager, managedRoom)).toBe(true);
     expect(canApproveOrRejectBooking(manager, otherRoom)).toBe(false);
     expect(canEditRoomPolicy(manager, managedRoom)).toBe(true);
@@ -62,7 +62,7 @@ describe("authorization matrix", () => {
     expect(canViewAccessHistoryForRoom(manager, otherRoom)).toBe(false);
   });
 
-  it("lets requesters see their own booking, managers see assigned rooms, and admins see all", () => {
+  it("lets requesters see their own booking, managers see assigned rooms, and admins see all", async () => {
     const ownBooking = {
       requesterId: "student",
       room: otherRoom,
@@ -79,7 +79,7 @@ describe("authorization matrix", () => {
     expect(canViewBookingDetails(admin, managedBooking)).toBe(true);
   });
 
-  it("restricts credential administration and institution audit to admin", () => {
+  it("restricts credential administration and institution audit to admin", async () => {
     expect(canBindOrRevokeCredential(admin)).toBe(true);
     expect(canBindOrRevokeCredential(manager)).toBe(false);
     expect(canBindOrRevokeCredential(student)).toBe(false);

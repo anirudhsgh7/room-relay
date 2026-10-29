@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { getBookingTimeline } from "@/lib/bookings/timeline";
 import {
   getIncidentDetail,
@@ -10,7 +10,7 @@ import {
   resolveIncident,
   reviewIncident,
 } from "@/lib/incidents/service";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -23,31 +23,31 @@ const defaultFilters = {
   page: 1,
 };
 
-function countAudit(testDatabase: SeededTestDatabase): number {
+async function countAudit(testDatabase: SeededTestDatabase): Promise<number> {
   return (
-    testDatabase.db
+    (await testDatabase.db
       .prepare("SELECT count(*) AS count FROM audit_events")
-      .get() as { count: number }
+      .get()) as { count: number }
   ).count;
 }
 
 describe("incident review and close-out", () => {
   let testDatabase: SeededTestDatabase;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
-  let otherStudent: NonNullable<ReturnType<typeof getProfileById>>;
-  let priya: NonNullable<ReturnType<typeof getProfileById>>;
-  let marcus: NonNullable<ReturnType<typeof getProfileById>>;
-  let admin: NonNullable<ReturnType<typeof getProfileById>>;
+  let student: UserProfile;
+  let otherStudent: UserProfile;
+  let priya: UserProfile;
+  let marcus: UserProfile;
+  let admin: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-    otherStudent = getProfileById(testDatabase.db, "usr_noah_williams")!;
-    priya = getProfileById(testDatabase.db, "usr_priya_nair")!;
-    marcus = getProfileById(testDatabase.db, "usr_marcus_webb")!;
-    admin = getProfileById(testDatabase.db, "usr_rowan_ellis")!;
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+    otherStudent = await getTestProfile(testDatabase.db, "usr_noah_williams");
+    priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
+    marcus = await getTestProfile(testDatabase.db, "usr_marcus_webb");
+    admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
   });
 
   afterEach(() => {
@@ -55,11 +55,11 @@ describe("incident review and close-out", () => {
     testDatabase.cleanup();
   });
 
-  it("scopes the incident queue to assigned rooms and admin", () => {
-    const priyaQueue = listIncidents(testDatabase.db, priya, defaultFilters);
-    const marcusQueue = listIncidents(testDatabase.db, marcus, defaultFilters);
-    const adminQueue = listIncidents(testDatabase.db, admin, defaultFilters);
-    const studentQueue = listIncidents(testDatabase.db, student, defaultFilters);
+  it("scopes the incident queue to assigned rooms and admin", async () => {
+    const priyaQueue = await listIncidents(testDatabase.db, priya, defaultFilters);
+    const marcusQueue = await listIncidents(testDatabase.db, marcus, defaultFilters);
+    const adminQueue = await listIncidents(testDatabase.db, admin, defaultFilters);
+    const studentQueue = await listIncidents(testDatabase.db, student, defaultFilters);
 
     expect(priyaQueue.items.map((item) => item.id)).toEqual([
       "incident_light_reviewing",
@@ -70,9 +70,9 @@ describe("incident review and close-out", () => {
     expect(studentQueue.items).toEqual([]);
   });
 
-  it("lets the assigned manager start a review but not resolve", () => {
-    const beforeAudit = countAudit(testDatabase);
-    const review = reviewIncident(testDatabase.db, priya, {
+  it("lets the assigned manager start a review but not resolve", async () => {
+    const beforeAudit = await countAudit(testDatabase);
+    const review = await reviewIncident(testDatabase.db, priya, {
       incidentId: "incident_equipment_open",
       note: "The missing stand was confirmed during the handover review.",
     });
@@ -81,9 +81,9 @@ describe("incident review and close-out", () => {
       ok: true,
       receipt: { status: "reviewing" },
     });
-    expect(countAudit(testDatabase)).toBe(beforeAudit + 1);
+    expect(await countAudit(testDatabase)).toBe(beforeAudit + 1);
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         `SELECT status, manager_reviewed_by, manager_review_note
          FROM incidents WHERE id = 'incident_equipment_open'`,
@@ -98,28 +98,28 @@ describe("incident review and close-out", () => {
       manager_reviewed_by: "usr_priya_nair",
     });
 
-    const resolveAttempt = resolveIncident(testDatabase.db, priya, {
+    const resolveAttempt = await resolveIncident(testDatabase.db, priya, {
       incidentId: "incident_equipment_open",
       resolutionNote: "Managers cannot finalize this incident.",
     });
     expect(resolveAttempt).toMatchObject({ ok: false, kind: "forbidden" });
   });
 
-  it("does not let an unassigned manager read or review the incident", () => {
+  it("does not let an unassigned manager read or review the incident", async () => {
     expect(
-      getIncidentDetail(testDatabase.db, marcus, "incident_equipment_open"),
+      await getIncidentDetail(testDatabase.db, marcus, "incident_equipment_open"),
     ).toBeNull();
     expect(
-      reviewIncident(testDatabase.db, marcus, {
+      await reviewIncident(testDatabase.db, marcus, {
         incidentId: "incident_equipment_open",
         note: "An unassigned manager should not reach this review.",
       }),
     ).toMatchObject({ ok: false, kind: "not_found" });
   });
 
-  it("lets an admin resolve and complete the booking when no other incident remains", () => {
-    const beforeAudit = countAudit(testDatabase);
-    const result = resolveIncident(testDatabase.db, admin, {
+  it("lets an admin resolve and complete the booking when no other incident remains", async () => {
+    const beforeAudit = await countAudit(testDatabase);
+    const result = await resolveIncident(testDatabase.db, admin, {
       incidentId: "incident_equipment_open",
       resolutionNote:
         "The equipment set was checked and the missing stand was replaced.",
@@ -132,9 +132,9 @@ describe("incident review and close-out", () => {
         bookingCompleted: true,
       },
     });
-    expect(countAudit(testDatabase)).toBe(beforeAudit + 2);
+    expect(await countAudit(testDatabase)).toBe(beforeAudit + 2);
 
-    const booking = testDatabase.db
+    const booking = await testDatabase.db
       .prepare(
         "SELECT status, closed_at, closure_reason FROM bookings WHERE id = 'booking_incident_open'",
       )
@@ -148,8 +148,8 @@ describe("incident review and close-out", () => {
     expect(booking.closure_reason).toBe("incident_resolved");
   });
 
-  it("keeps the booking in incident state until all incidents resolve", () => {
-    testDatabase.db
+  it("keeps the booking in incident state until all incidents resolve", async () => {
+    await testDatabase.db
       .prepare(
         `INSERT INTO incidents (
            id, booking_id, category, description, status, reporter_id,
@@ -166,7 +166,7 @@ describe("incident review and close-out", () => {
       )
       .run();
 
-    const first = resolveIncident(testDatabase.db, admin, {
+    const first = await resolveIncident(testDatabase.db, admin, {
       incidentId: "incident_equipment_open",
       resolutionNote: "The missing stand was replaced after review.",
     });
@@ -175,14 +175,14 @@ describe("incident review and close-out", () => {
       receipt: { bookingCompleted: false },
     });
 
-    const during = testDatabase.db
+    const during = await testDatabase.db
       .prepare(
         "SELECT status FROM bookings WHERE id = 'booking_incident_open'",
       )
       .get() as { status: string };
     expect(during.status).toBe("incident");
 
-    const second = resolveIncident(testDatabase.db, admin, {
+    const second = await resolveIncident(testDatabase.db, admin, {
       incidentId: "incident_second_open",
       resolutionNote: "The second issue was reviewed and cleared by admin.",
     });
@@ -191,7 +191,7 @@ describe("incident review and close-out", () => {
       receipt: { bookingCompleted: true },
     });
 
-    const after = testDatabase.db
+    const after = await testDatabase.db
       .prepare(
         "SELECT status FROM bookings WHERE id = 'booking_incident_open'",
       )
@@ -199,23 +199,23 @@ describe("incident review and close-out", () => {
     expect(after.status).toBe("completed");
   });
 
-  it("lets the requester read their own incident but not another user's", () => {
+  it("lets the requester read their own incident but not another user's", async () => {
     expect(
-      getIncidentDetail(
+      await getIncidentDetail(
         testDatabase.db,
         student,
         "incident_equipment_open",
       ),
     ).not.toBeNull();
     expect(
-      getIncidentDetail(
+      await getIncidentDetail(
         testDatabase.db,
         student,
         "incident_light_reviewing",
       ),
     ).toBeNull();
     expect(
-      getIncidentDetail(
+      await getIncidentDetail(
         testDatabase.db,
         otherStudent,
         "incident_light_reviewing",
@@ -223,8 +223,8 @@ describe("incident review and close-out", () => {
     ).not.toBeNull();
   });
 
-  it("provides a role-scoped booking timeline with access and close-out events", () => {
-    const timeline = getBookingTimeline(
+  it("provides a role-scoped booking timeline with access and close-out events", async () => {
+    const timeline = await getBookingTimeline(
       testDatabase.db,
       student,
       "booking_completed_seminar",
@@ -237,14 +237,14 @@ describe("incident review and close-out", () => {
     expect(titles).toContain("Simulated access allowed");
     expect(titles).toContain("Check-out condition reported");
     expect(
-      getBookingTimeline(
+      await getBookingTimeline(
         testDatabase.db,
         priya,
         "booking_incident_open",
       ),
     ).not.toBeNull();
     expect(
-      getBookingTimeline(
+      await getBookingTimeline(
         testDatabase.db,
         marcus,
         "booking_incident_open",
@@ -252,7 +252,7 @@ describe("incident review and close-out", () => {
     ).toBeNull();
   });
 
-  it("parses incident filters safely", () => {
+  it("parses incident filters safely", async () => {
     const parsed = parseIncidentFilters({
       status: "reviewing",
       room: "MED-01",

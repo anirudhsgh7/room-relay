@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import {
   listAccessHistory,
   getAccessSimulatorData,
@@ -8,7 +8,7 @@ import {
 } from "@/lib/access/queries";
 import { simulateAccessCheck } from "@/lib/access/service";
 import { clearRateLimitsForTests } from "@/lib/rate-limit";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -18,33 +18,33 @@ function eventNonce(): string {
   return randomUUID();
 }
 
-function count(
+async function count(
   testDatabase: SeededTestDatabase,
   table: "access_events" | "audit_events",
-): number {
+): Promise<number> {
   return (
-    testDatabase.db
+    (await testDatabase.db
       .prepare(`SELECT count(*) AS count FROM ${table}`)
-      .get() as { count: number }
+      .get()) as { count: number }
   ).count;
 }
 
 describe("time-bound access policy", () => {
   let testDatabase: SeededTestDatabase;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
-  let otherStudent: NonNullable<ReturnType<typeof getProfileById>>;
-  let priya: NonNullable<ReturnType<typeof getProfileById>>;
-  let admin: NonNullable<ReturnType<typeof getProfileById>>;
+  let student: UserProfile;
+  let otherStudent: UserProfile;
+  let priya: UserProfile;
+  let admin: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
     clearRateLimitsForTests();
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-    otherStudent = getProfileById(testDatabase.db, "usr_noah_williams")!;
-    priya = getProfileById(testDatabase.db, "usr_priya_nair")!;
-    admin = getProfileById(testDatabase.db, "usr_rowan_ellis")!;
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+    otherStudent = await getTestProfile(testDatabase.db, "usr_noah_williams");
+    priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
+    admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
   });
 
   afterEach(() => {
@@ -53,10 +53,10 @@ describe("time-bound access policy", () => {
     testDatabase.cleanup();
   });
 
-  it("allows a valid own credential inside the active demo booking window", () => {
-    const beforeAccessEvents = count(testDatabase, "access_events");
-    const beforeAudit = count(testDatabase, "audit_events");
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("allows a valid own credential inside the active demo booking window", async () => {
+    const beforeAccessEvents = await count(testDatabase, "access_events");
+    const beforeAudit = await count(testDatabase, "audit_events");
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
@@ -71,17 +71,17 @@ describe("time-bound access policy", () => {
       replayed: false,
     });
     expect(result.response.bookingId).toBe("booking_demo_active_classroom");
-    expect(count(testDatabase, "access_events")).toBe(beforeAccessEvents + 1);
-    expect(count(testDatabase, "audit_events")).toBe(beforeAudit + 1);
+    expect(await count(testDatabase, "access_events")).toBe(beforeAccessEvents + 1);
+    expect(await count(testDatabase, "audit_events")).toBe(beforeAudit + 1);
 
-    const booking = testDatabase.db
+    const booking = await testDatabase.db
       .prepare(
         "SELECT status FROM bookings WHERE id = 'booking_demo_active_classroom'",
       )
       .get() as { status: string };
     expect(booking.status).toBe("checked_in");
 
-    const event = testDatabase.db
+    const event = await testDatabase.db
       .prepare(
         "SELECT actor_id, booking_id, result, reason_code, source FROM access_events WHERE id = ?",
       )
@@ -101,16 +101,16 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("is idempotent for the same actor, nonce, and request payload", () => {
+  it("is idempotent for the same actor, nonce, and request payload", async () => {
     const nonce = eventNonce();
     const payload = {
       credentialId: "cred_amelia_active",
       roomId: "room_classroom_14",
       eventNonce: nonce,
     };
-    const first = simulateAccessCheck(testDatabase.db, student, payload);
-    const afterFirst = count(testDatabase, "access_events");
-    const second = simulateAccessCheck(testDatabase.db, student, payload);
+    const first = await simulateAccessCheck(testDatabase.db, student, payload);
+    const afterFirst = await count(testDatabase, "access_events");
+    const second = await simulateAccessCheck(testDatabase.db, student, payload);
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
@@ -119,18 +119,18 @@ describe("time-bound access policy", () => {
     expect(first.response.replayed).toBe(false);
     expect(second.response.replayed).toBe(true);
     expect(second.response.eventId).toBe(first.response.eventId);
-    expect(count(testDatabase, "access_events")).toBe(afterFirst);
+    expect(await count(testDatabase, "access_events")).toBe(afterFirst);
   });
 
-  it("rejects a nonce reused with a different request payload", () => {
+  it("rejects a nonce reused with a different request payload", async () => {
     const nonce = eventNonce();
-    simulateAccessCheck(testDatabase.db, student, {
+    await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_classroom_14",
       eventNonce: nonce,
     });
 
-    const result = simulateAccessCheck(testDatabase.db, student, {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_seminar_02",
       eventNonce: nonce,
@@ -143,8 +143,8 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("denies a revoked credential and leaves the booking approved", () => {
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("denies a revoked credential and leaves the booking approved", async () => {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_revoked",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
@@ -157,7 +157,7 @@ describe("time-bound access policy", () => {
       reasonCode: "CREDENTIAL_REVOKED",
     });
 
-    const booking = testDatabase.db
+    const booking = await testDatabase.db
       .prepare(
         "SELECT status FROM bookings WHERE id = 'booking_demo_active_classroom'",
       )
@@ -165,13 +165,13 @@ describe("time-bound access policy", () => {
     expect(booking.status).toBe("approved");
   });
 
-  it("denies an unknown or another user's credential without ownership disclosure", () => {
-    const unknown = simulateAccessCheck(testDatabase.db, student, {
+  it("denies an unknown or another user's credential without ownership disclosure", async () => {
+    const unknown = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_does_not_exist",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
     });
-    const notOwned = simulateAccessCheck(testDatabase.db, student, {
+    const notOwned = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_marcus_active",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
@@ -184,8 +184,8 @@ describe("time-bound access policy", () => {
     expect(JSON.stringify(notOwned)).not.toContain("Marcus");
   });
 
-  it("denies a pending request as not approved", () => {
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("denies a pending request as not approved", async () => {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_media_studio",
       eventNonce: eventNonce(),
@@ -200,8 +200,8 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("denies a cancelled booking with a safe no-approved reason", () => {
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("denies a cancelled booking with a safe no-approved reason", async () => {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_library_quiet",
       eventNonce: eventNonce(),
@@ -215,8 +215,8 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("denies a future approved booking outside its time window", () => {
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("denies a future approved booking outside its time window", async () => {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_seminar_02",
       eventNonce: eventNonce(),
@@ -230,8 +230,8 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("denies inactive rooms", () => {
-    const result = simulateAccessCheck(testDatabase.db, student, {
+  it("denies inactive rooms", async () => {
+    const result = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_archive_lab",
       eventNonce: eventNonce(),
@@ -245,13 +245,13 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("denies a manager or admin without a matching booking", () => {
-    const managerResult = simulateAccessCheck(testDatabase.db, priya, {
+  it("denies a manager or admin without a matching booking", async () => {
+    const managerResult = await simulateAccessCheck(testDatabase.db, priya, {
       credentialId: "cred_priya_active",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
     });
-    const adminResult = simulateAccessCheck(testDatabase.db, admin, {
+    const adminResult = await simulateAccessCheck(testDatabase.db, admin, {
       credentialId: "cred_rowan_active",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
@@ -265,8 +265,8 @@ describe("time-bound access policy", () => {
     );
   });
 
-  it("enforces exact start and end time boundaries", () => {
-    testDatabase.db
+  it("enforces exact start and end time boundaries", async () => {
+    await testDatabase.db
       .prepare(
         `INSERT INTO bookings (
            id, room_id, requester_id, purpose, expected_attendance,
@@ -285,7 +285,7 @@ describe("time-bound access policy", () => {
         new Date(fixedNow.getTime() + 30 * 60_000).toISOString(),
       );
 
-    testDatabase.db
+    await testDatabase.db
       .prepare(
         `INSERT INTO bookings (
            id, room_id, requester_id, purpose, expected_attendance,
@@ -304,12 +304,12 @@ describe("time-bound access policy", () => {
         fixedNow.toISOString(),
       );
 
-    const exactStart = simulateAccessCheck(testDatabase.db, student, {
+    const exactStart = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_seminar_02",
       eventNonce: eventNonce(),
     });
-    const exactEnd = simulateAccessCheck(testDatabase.db, student, {
+    const exactEnd = await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_library_quiet",
       eventNonce: eventNonce(),
@@ -321,12 +321,12 @@ describe("time-bound access policy", () => {
     );
   });
 
-  it("rate limits repeated access attempts and logs the rate-limit denial", () => {
+  it("rate limits repeated access attempts and logs the rate-limit denial", async () => {
     let rateLimitedResult: Awaited<ReturnType<typeof simulateAccessCheck>> | null =
       null;
 
     for (let index = 0; index < 21; index += 1) {
-      const result = simulateAccessCheck(testDatabase.db, student, {
+      const result = await simulateAccessCheck(testDatabase.db, student, {
         credentialId: "cred_amelia_active",
         roomId: "room_library_quiet",
         eventNonce: eventNonce(),
@@ -347,8 +347,8 @@ describe("time-bound access policy", () => {
     });
   });
 
-  it("scopes access history to the actor, assigned rooms, and admin", () => {
-    simulateAccessCheck(testDatabase.db, student, {
+  it("scopes access history to the actor, assigned rooms, and admin", async () => {
+    await simulateAccessCheck(testDatabase.db, student, {
       credentialId: "cred_amelia_active",
       roomId: "room_classroom_14",
       eventNonce: eventNonce(),
@@ -362,10 +362,10 @@ describe("time-bound access policy", () => {
       page: 1,
     };
 
-    const studentHistory = listAccessHistory(testDatabase.db, student, filters);
-    const priyaHistory = listAccessHistory(testDatabase.db, priya, filters);
-    const adminHistory = listAccessHistory(testDatabase.db, admin, filters);
-    const otherStudentHistory = listAccessHistory(
+    const studentHistory = await listAccessHistory(testDatabase.db, student, filters);
+    const priyaHistory = await listAccessHistory(testDatabase.db, priya, filters);
+    const adminHistory = await listAccessHistory(testDatabase.db, admin, filters);
+    const otherStudentHistory = await listAccessHistory(
       testDatabase.db,
       otherStudent,
       filters,
@@ -381,8 +381,8 @@ describe("time-bound access policy", () => {
     expect(otherStudentHistory.items).toEqual([]);
   });
 
-  it("builds simulator choices from own credentials and active rooms", () => {
-    const data = getAccessSimulatorData(testDatabase.db, student);
+  it("builds simulator choices from own credentials and active rooms", async () => {
+    const data = await getAccessSimulatorData(testDatabase.db, student);
 
     expect(data.credentials.map((credential) => credential.id)).toEqual(
       expect.arrayContaining(["cred_amelia_active", "cred_amelia_revoked"]),
@@ -394,7 +394,7 @@ describe("time-bound access policy", () => {
     expect(data.rooms.every((room) => room.code !== "ARC-B1")).toBe(true);
   });
 
-  it("parses access history filters without broadening scope", () => {
+  it("parses access history filters without broadening scope", async () => {
     const parsed = parseAccessHistoryFilters({
       room: "MED-01",
       result: "denied",

@@ -140,12 +140,12 @@ function eligibilityWarnings(value: string | null): EligibilityWarning[] {
   }
 }
 
-function findExistingByKey(
+async function findExistingByKey(
   db: RoomRelayDatabase,
   requesterId: string,
   submissionKey: string,
-): ExistingBookingRow | null {
-  const row = db
+): Promise<ExistingBookingRow | null> {
+  const row = (await db
     .prepare(
       `SELECT
          b.id, b.purpose, b.group_name, b.expected_attendance, b.start_at,
@@ -157,7 +157,7 @@ function findExistingByKey(
        WHERE b.requester_id = ?
          AND b.submission_key = ?`,
     )
-    .get(requesterId, submissionKey) as ExistingBookingRow | undefined;
+    .get([requesterId, submissionKey])) as ExistingBookingRow | undefined;
 
   return row ?? null;
 }
@@ -197,17 +197,17 @@ function withinHours(
   );
 }
 
-function buildAlternatives(
+async function buildAlternatives(
   db: RoomRelayDatabase,
   room: RoomDetail,
   interval: CampusInterval,
-): SafeAlternative[] {
+): Promise<SafeAlternative[]> {
   if (!room.policy.requestsEnabled) {
     return [];
   }
 
-  const blockers = getAllBlockingBookings(db, room.id);
-  const blackouts = loadActiveBlackoutWindows(
+  const blockers = await getAllBlockingBookings(db, room.id);
+  const blackouts = await loadActiveBlackoutWindows(
     db,
     room.id,
     new Date().toISOString(),
@@ -347,11 +347,11 @@ function roomReceipt(
   };
 }
 
-export function submitBookingRequest(
+export async function submitBookingRequest(
   db: RoomRelayDatabase,
   actor: UserProfile,
   submission: BookingRequestSubmission,
-): BookingResult {
+): Promise<BookingResult> {
   const parsed = bookingRequestSubmissionSchema.safeParse(submission);
 
   if (!parsed.success) {
@@ -386,7 +386,7 @@ export function submitBookingRequest(
 
   const interval = intervalResult.interval;
   const hash = payloadHash(input, interval);
-  const existing = findExistingByKey(
+  const existing = await findExistingByKey(
     db,
     actor.id,
     input.idempotencyKey,
@@ -427,8 +427,8 @@ export function submitBookingRequest(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): BookingResult => {
-      const freshProfile = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<BookingResult> => {
+      const freshProfile = await getProfileById(db, actor.id);
 
       if (!freshProfile || freshProfile.role !== "student") {
         return {
@@ -440,7 +440,7 @@ export function submitBookingRequest(
 
       // Re-check idempotency inside the write transaction in case a concurrent
       // retry won the race.
-      const racedExisting = findExistingByKey(
+      const racedExisting = await findExistingByKey(
         db,
         freshProfile.id,
         input.idempotencyKey,
@@ -459,7 +459,7 @@ export function submitBookingRequest(
         return bookingReceiptFromRow(racedExisting);
       }
 
-      const room = getRoomDetail(db, freshProfile, input.roomCode, null);
+      const room = await getRoomDetail(db, freshProfile, input.roomCode, null);
 
       if (!room) {
         return {
@@ -542,24 +542,24 @@ export function submitBookingRequest(
       }
 
       if (
-        !checkRoomSchedule(
+        !(await checkRoomSchedule(
           db,
           room.id,
           interval.date,
           interval.weekday,
           interval.startMinutes,
           interval.endMinutes,
-        )
+        ))
       ) {
         return {
           ok: false,
           kind: "outside_hours",
           message: "The requested time is outside this room's opening hours.",
-          alternatives: buildAlternatives(db, room, interval),
+          alternatives: await buildAlternatives(db, room, interval),
         };
       }
 
-      const [blackout] = findOverlappingBlackouts(
+      const [blackout] = await findOverlappingBlackouts(
         db,
         room.id,
         interval.startUtc,
@@ -571,11 +571,11 @@ export function submitBookingRequest(
           ok: false,
           kind: "blackout",
           message: `The room is closed for part of this time: ${blackout.reason}`,
-          alternatives: buildAlternatives(db, room, interval),
+          alternatives: await buildAlternatives(db, room, interval),
         };
       }
 
-      const conflict = getBlockingBookings(
+      const conflict = await getBlockingBookings(
         db,
         room.id,
         interval.startUtc,
@@ -592,12 +592,12 @@ export function submitBookingRequest(
           message: room.policy.waitlistEnabled
             ? "This time is already booked. You can join the waitlist, or choose another time or room."
             : "This time is already booked. Choose another time or room.",
-          alternatives: buildAlternatives(db, room, interval),
+          alternatives: await buildAlternatives(db, room, interval),
           waitlistAvailable: room.policy.waitlistEnabled,
         };
       }
 
-      const duplicateBookingId = findPendingDuplicate(db, {
+      const duplicateBookingId = await findPendingDuplicate(db, {
         requesterId: freshProfile.id,
         roomId: room.id,
         startUtc: interval.startUtc,
@@ -615,16 +615,16 @@ export function submitBookingRequest(
       }
 
       if (room.policy.maxActivePerRequester > 0) {
-        const active = db
+        const active = (await db
           .prepare(
             `SELECT count(*) AS count
              FROM bookings
              WHERE requester_id = ?
                AND room_id = ?
                AND status IN ('pending', 'waitlisted', 'approved', 'checked_in')
-               AND julianday(end_at) > julianday(?)`,
+               AND end_at > ?`,
           )
-          .get(freshProfile.id, room.id, new Date().toISOString()) as {
+          .get([freshProfile.id, room.id, new Date().toISOString()])) as {
           count: number;
         };
 
@@ -677,7 +677,7 @@ export function submitBookingRequest(
         )
       `);
 
-      insertBooking.run({
+      await insertBooking.run({
         id: bookingId,
         room_id: room.id,
         requester_id: freshProfile.id,
@@ -695,7 +695,7 @@ export function submitBookingRequest(
         waitlisted_at: status === "waitlisted" ? nowIso : null,
       });
 
-      recordAudit(db, {
+      await recordAudit(db, {
         actorId: freshProfile.id,
         action:
           status === "waitlisted" ? "booking.waitlist_joined" : "booking.submitted",
@@ -720,10 +720,10 @@ export function submitBookingRequest(
       });
 
       if (status === "pending") {
-        const managerId = activeRoomManagerId(db, room.id);
+        const managerId = await activeRoomManagerId(db, room.id);
 
         if (managerId) {
-          createNotification(db, {
+          await createNotification(db, {
             recipientId: managerId,
             kind: "request_submitted",
             title: `New request: ${room.name}`,
@@ -751,7 +751,7 @@ export function submitBookingRequest(
       );
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     console.error(
       "Booking submission failed:",

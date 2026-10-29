@@ -58,7 +58,7 @@ export async function decideBookingAction(
     return { error: "Choose whether to approve or reject the request." };
   }
 
-  const result = decideBooking(getDatabase(), profile, {
+  const result = await decideBooking(getDatabase(), profile, {
     bookingId,
     action,
     decisionReason,
@@ -134,7 +134,7 @@ export async function cancelAsStaffAction(
 
   const field = (name: string) =>
     typeof formData.get(name) === "string" ? String(formData.get(name)) : "";
-  const result = cancelBookingAsStaff(getDatabase(), profile, {
+  const result = await cancelBookingAsStaff(getDatabase(), profile, {
     bookingId: field("bookingId"),
     reason: field("reason"),
   });

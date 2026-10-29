@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { decideBooking } from "@/lib/bookings/decisions";
 import {
   getManagerRequest,
   listManagerQueue,
 } from "@/lib/bookings/manager-queries";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -19,29 +19,29 @@ const defaultFilters = {
   page: 1,
 };
 
-function auditCount(testDatabase: SeededTestDatabase): number {
+async function auditCount(testDatabase: SeededTestDatabase): Promise<number> {
   return (
-    testDatabase.db
+    (await testDatabase.db
       .prepare("SELECT count(*) AS count FROM audit_events")
-      .get() as { count: number }
+      .get()) as { count: number }
   ).count;
 }
 
 describe("manager queue and decisions", () => {
   let testDatabase: SeededTestDatabase;
-  let priya: NonNullable<ReturnType<typeof getProfileById>>;
-  let marcus: NonNullable<ReturnType<typeof getProfileById>>;
-  let admin: NonNullable<ReturnType<typeof getProfileById>>;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
+  let priya: UserProfile;
+  let marcus: UserProfile;
+  let admin: UserProfile;
+  let student: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
-    priya = getProfileById(testDatabase.db, "usr_priya_nair")!;
-    marcus = getProfileById(testDatabase.db, "usr_marcus_webb")!;
-    admin = getProfileById(testDatabase.db, "usr_rowan_ellis")!;
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
+    priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
+    marcus = await getTestProfile(testDatabase.db, "usr_marcus_webb");
+    admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
   });
 
   afterEach(() => {
@@ -49,23 +49,23 @@ describe("manager queue and decisions", () => {
     testDatabase.cleanup();
   });
 
-  it("scopes the queue by room assignment and lets admin see all rooms", () => {
-    const priyaQueue = listManagerQueue(
+  it("scopes the queue by room assignment and lets admin see all rooms", async () => {
+    const priyaQueue = await listManagerQueue(
       testDatabase.db,
       priya,
       defaultFilters,
     );
-    const marcusQueue = listManagerQueue(
+    const marcusQueue = await listManagerQueue(
       testDatabase.db,
       marcus,
       defaultFilters,
     );
-    const adminQueue = listManagerQueue(
+    const adminQueue = await listManagerQueue(
       testDatabase.db,
       admin,
       defaultFilters,
     );
-    const studentQueue = listManagerQueue(
+    const studentQueue = await listManagerQueue(
       testDatabase.db,
       student,
       defaultFilters,
@@ -92,16 +92,16 @@ describe("manager queue and decisions", () => {
     expect(studentQueue.rooms).toEqual([]);
   });
 
-  it("filters the scoped queue by eligibility and overlap state", () => {
-    const eligibilityReview = listManagerQueue(testDatabase.db, priya, {
+  it("filters the scoped queue by eligibility and overlap state", async () => {
+    const eligibilityReview = await listManagerQueue(testDatabase.db, priya, {
       ...defaultFilters,
       eligibility: "needs_review",
     });
-    const overlaps = listManagerQueue(testDatabase.db, priya, {
+    const overlaps = await listManagerQueue(testDatabase.db, priya, {
       ...defaultFilters,
       conflict: "any",
     });
-    const marcusReview = listManagerQueue(testDatabase.db, marcus, {
+    const marcusReview = await listManagerQueue(testDatabase.db, marcus, {
       ...defaultFilters,
       eligibility: "needs_review",
     });
@@ -111,24 +111,24 @@ describe("manager queue and decisions", () => {
     expect(marcusReview.items).toHaveLength(0);
   });
 
-  it("returns safe not-found for cross-room detail access", () => {
+  it("returns safe not-found for cross-room detail access", async () => {
     expect(
-      getManagerRequest(testDatabase.db, priya, "booking_pending_seminar"),
+      await getManagerRequest(testDatabase.db, priya, "booking_pending_seminar"),
     ).toBeNull();
     expect(
-      getManagerRequest(testDatabase.db, marcus, "booking_pending_media"),
+      await getManagerRequest(testDatabase.db, marcus, "booking_pending_media"),
     ).toBeNull();
     expect(
-      getManagerRequest(testDatabase.db, admin, "booking_pending_media"),
+      await getManagerRequest(testDatabase.db, admin, "booking_pending_media"),
     ).not.toBeNull();
     expect(
-      getManagerRequest(testDatabase.db, student, "booking_pending_media"),
+      await getManagerRequest(testDatabase.db, student, "booking_pending_media"),
     ).toBeNull();
   });
 
-  it("approves a valid pending request and writes one audit event", () => {
-    const before = auditCount(testDatabase);
-    const result = decideBooking(testDatabase.db, marcus, {
+  it("approves a valid pending request and writes one audit event", async () => {
+    const before = await auditCount(testDatabase);
+    const result = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "The request meets current room policy and eligibility.",
@@ -142,7 +142,7 @@ describe("manager queue and decisions", () => {
       receipt: { status: "approved" },
     });
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         "SELECT status, decided_by, decision_reason, eligibility_override_reason FROM bookings WHERE id = 'booking_pending_seminar'",
       )
@@ -158,12 +158,12 @@ describe("manager queue and decisions", () => {
       decided_by: "usr_marcus_webb",
       eligibility_override_reason: null,
     });
-    expect(auditCount(testDatabase)).toBe(before + 1);
+    expect(await auditCount(testDatabase)).toBe(before + 1);
   });
 
-  it("blocks a second decision and does not append another success event", () => {
+  it("blocks a second decision and does not append another success event", async () => {
     const reason = "The request meets current room policy and eligibility.";
-    const first = decideBooking(testDatabase.db, marcus, {
+    const first = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: reason,
@@ -171,9 +171,9 @@ describe("manager queue and decisions", () => {
       overrideReason: "",
     });
     expect(first.ok).toBe(true);
-    const afterFirst = auditCount(testDatabase);
+    const afterFirst = await auditCount(testDatabase);
 
-    const second = decideBooking(testDatabase.db, marcus, {
+    const second = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "reject",
       decisionReason: "Trying to replace the first decision.",
@@ -186,11 +186,11 @@ describe("manager queue and decisions", () => {
       kind: "already_decided",
       currentStatus: "approved",
     });
-    expect(auditCount(testDatabase)).toBe(afterFirst);
+    expect(await auditCount(testDatabase)).toBe(afterFirst);
   });
 
-  it("rejects a pending request with a requester-visible reason", () => {
-    const result = decideBooking(testDatabase.db, priya, {
+  it("rejects a pending request with a requester-visible reason", async () => {
+    const result = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_media",
       action: "reject",
       decisionReason: "The equipment induction is not verified for this booking.",
@@ -203,7 +203,7 @@ describe("manager queue and decisions", () => {
       receipt: { status: "rejected" },
     });
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         "SELECT status, decided_by, decision_reason FROM bookings WHERE id = 'booking_pending_media'",
       )
@@ -221,9 +221,9 @@ describe("manager queue and decisions", () => {
     });
   });
 
-  it("requires an override for an unsatisfied mandatory requirement", () => {
-    const before = auditCount(testDatabase);
-    const result = decideBooking(testDatabase.db, priya, {
+  it("requires an override for an unsatisfied mandatory requirement", async () => {
+    const before = await auditCount(testDatabase);
+    const result = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_media",
       action: "approve",
       decisionReason: "The rest of the request meets room policy.",
@@ -235,16 +235,16 @@ describe("manager queue and decisions", () => {
       ok: false,
       kind: "eligibility_required",
     });
-    expect(auditCount(testDatabase)).toBe(before);
+    expect(await auditCount(testDatabase)).toBe(before);
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare("SELECT status FROM bookings WHERE id = 'booking_pending_media'")
       .get() as { status: string };
     expect(row.status).toBe("pending");
   });
 
-  it("records a one-booking eligibility override without changing profile eligibility", () => {
-    const result = decideBooking(testDatabase.db, priya, {
+  it("records a one-booking eligibility override without changing profile eligibility", async () => {
+    const result = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_media",
       action: "approve",
       decisionReason: "Approved after a manual review of the booking context.",
@@ -255,7 +255,7 @@ describe("manager queue and decisions", () => {
 
     expect(result).toMatchObject({ ok: true, receipt: { status: "approved" } });
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         `SELECT status, eligibility_override_reason,
                 eligibility_override_requirement_ids_json
@@ -273,7 +273,7 @@ describe("manager queue and decisions", () => {
       "req_media_equipment_induction",
     ]);
 
-    const eligibility = testDatabase.db
+    const eligibility = await testDatabase.db
       .prepare(
         "SELECT status FROM profile_eligibility WHERE profile_id = 'usr_amelia_chen' AND requirement_id = 'req_media_equipment_induction'",
       )
@@ -281,8 +281,8 @@ describe("manager queue and decisions", () => {
     expect(eligibility.status).toBe("unverified");
   });
 
-  it("rejects an invalid override selection", () => {
-    const result = decideBooking(testDatabase.db, priya, {
+  it("rejects an invalid override selection", async () => {
+    const result = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_media",
       action: "approve",
       decisionReason: "Approved after a manual review of the booking context.",
@@ -294,14 +294,14 @@ describe("manager queue and decisions", () => {
     expect(result).toMatchObject({ ok: false, kind: "validation" });
   });
 
-  it("blocks a newly confirmed conflict and leaves the request pending", () => {
-    const pending = testDatabase.db
+  it("blocks a newly confirmed conflict and leaves the request pending", async () => {
+    const pending = await testDatabase.db
       .prepare(
         "SELECT room_id, start_at, end_at FROM bookings WHERE id = 'booking_pending_seminar'",
       )
       .get() as { room_id: string; start_at: string; end_at: string };
 
-    testDatabase.db
+    await testDatabase.db
       .prepare(
         `INSERT INTO bookings (
            id, room_id, requester_id, purpose, expected_attendance,
@@ -317,8 +317,8 @@ describe("manager queue and decisions", () => {
       )
       .run(pending.room_id, pending.start_at, pending.end_at);
 
-    const before = auditCount(testDatabase);
-    const result = decideBooking(testDatabase.db, marcus, {
+    const before = await auditCount(testDatabase);
+    const result = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "The request meets current room policy and eligibility.",
@@ -327,20 +327,20 @@ describe("manager queue and decisions", () => {
     });
 
     expect(result).toMatchObject({ ok: false, kind: "conflict" });
-    expect(auditCount(testDatabase)).toBe(before);
+    expect(await auditCount(testDatabase)).toBe(before);
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare("SELECT status FROM bookings WHERE id = 'booking_pending_seminar'")
       .get() as { status: string };
     expect(row.status).toBe("pending");
   });
 
-  it("blocks approval when the room is no longer active", () => {
-    testDatabase.db
+  it("blocks approval when the room is no longer active", async () => {
+    await testDatabase.db
       .prepare("UPDATE rooms SET status = 'inactive' WHERE id = 'room_seminar_02'")
       .run();
 
-    const result = decideBooking(testDatabase.db, marcus, {
+    const result = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "The request meets current room policy and eligibility.",
@@ -351,8 +351,8 @@ describe("manager queue and decisions", () => {
     expect(result).toMatchObject({ ok: false, kind: "room_unavailable" });
   });
 
-  it("lets an admin decide a request outside their room portfolio", () => {
-    const result = decideBooking(testDatabase.db, admin, {
+  it("lets an admin decide a request outside their room portfolio", async () => {
+    const result = await decideBooking(testDatabase.db, admin, {
       bookingId: "booking_pending_media",
       action: "reject",
       decisionReason: "Admin review found the request cannot be accommodated.",
@@ -365,7 +365,7 @@ describe("manager queue and decisions", () => {
       receipt: { status: "rejected" },
     });
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         "SELECT status, decided_by FROM bookings WHERE id = 'booking_pending_media'",
       )
@@ -376,8 +376,8 @@ describe("manager queue and decisions", () => {
     });
   });
 
-  it("requires a meaningful decision reason", () => {
-    const result = decideBooking(testDatabase.db, marcus, {
+  it("requires a meaningful decision reason", async () => {
+    const result = await decideBooking(testDatabase.db, marcus, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "Too short",
@@ -392,8 +392,8 @@ describe("manager queue and decisions", () => {
     });
   });
 
-  it("prevents an unassigned manager from deciding", () => {
-    const result = decideBooking(testDatabase.db, priya, {
+  it("prevents an unassigned manager from deciding", async () => {
+    const result = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "The request meets current room policy and eligibility.",

@@ -23,7 +23,7 @@ const DOTS: Record<NotificationTone, string> = {
 
 export default async function NotificationsPage() {
   const profile = await requireCurrentProfile();
-  const items = listNotifications(getDatabase(), profile, { limit: 100 });
+  const items = await listNotifications(getDatabase(), profile, { limit: 100 });
   const unread = items.filter((item) => !item.readAt).length;
 
   return (

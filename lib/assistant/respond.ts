@@ -354,11 +354,11 @@ function searchPhrase(parsed: ParsedQuery, when: string): string {
   return ["Find a room", ...needs, when].join(" ");
 }
 
-function findRooms(
+async function findRooms(
   db: RoomRelayDatabase,
   profile: UserProfile,
   parsed: ParsedQuery,
-): AssistantReply {
+): Promise<AssistantReply> {
   const filters = {
     minCapacity: parsed.capacity,
     building: parsed.building,
@@ -366,7 +366,7 @@ function findRooms(
   };
 
   if (!parsed.date || !parsed.startTime || !parsed.endTime) {
-    const rooms = searchRooms(db, profile, filters, null).slice(0, 4);
+    const rooms = (await searchRooms(db, profile, filters, null)).slice(0, 4);
     const missing =
       !parsed.date && !parsed.startTime ? "a day and time" : !parsed.date ? "a day" : "a time";
 
@@ -421,17 +421,17 @@ function findRooms(
     );
   }
 
-  const rooms = searchRooms(db, profile, filters, interval);
+  const rooms = await searchRooms(db, profile, filters, interval);
   const available = rooms.filter((room) => room.availability === "available");
   const summary = describeSearch(parsed, interval);
 
   if (rooms.length === 0) {
-    const largest = searchRooms(
+    const largest = (await searchRooms(
       db,
       profile,
       { minCapacity: null, building: parsed.building, facilities: parsed.facilities },
       null,
-    ).reduce((max, room) => Math.max(max, room.capacity), 0);
+    )).reduce((max, room) => Math.max(max, room.capacity), 0);
 
     return reply(
       parsed.capacity && largest > 0 && largest < parsed.capacity
@@ -524,12 +524,12 @@ function findRooms(
 }
 
 /** One named room at one time: a direct yes or no with the reason. */
-function checkOneRoom(
+async function checkOneRoom(
   db: RoomRelayDatabase,
   profile: UserProfile,
   room: RoomDetail,
   parsed: ParsedQuery,
-): AssistantReply {
+): Promise<AssistantReply> {
   if (!parsed.date || !parsed.startTime || !parsed.endTime) {
     return reply(
       `Which ${parsed.date ? "time" : "day"} should I check for ${room.name}?`,
@@ -553,7 +553,7 @@ function checkOneRoom(
     return reply(`${when} has already passed. Which day did you mean?`);
   }
 
-  const detail = getRoomDetail(db, profile, room.code, interval);
+  const detail = await getRoomDetail(db, profile, room.code, interval);
 
   if (!detail) {
     return reply(`${room.name} isn't available to browse right now.`);
@@ -673,14 +673,14 @@ function roomFacts(room: RoomDetail): AssistantReply {
 // Personal status
 // ---------------------------------------------------------------------------
 
-function myStatus(db: RoomRelayDatabase, profile: UserProfile): AssistantReply {
+async function myStatus(db: RoomRelayDatabase, profile: UserProfile): Promise<AssistantReply> {
   const nowMs = Date.now();
-  const bookings = listMyBookings(db, profile, 100).filter(
+  const bookings = (await listMyBookings(db, profile, 100)).filter(
     (booking) =>
       ["pending", "waitlisted", "approved", "checked_in", "incident"].includes(booking.status) &&
       (Date.parse(booking.endAt) > nowMs || booking.status === "checked_in" || booking.status === "incident"),
   );
-  const unread = countUnreadNotifications(db, profile.id);
+  const unread = await countUnreadNotifications(db, profile.id);
 
   if (bookings.length === 0) {
     return reply(
@@ -752,13 +752,14 @@ function myStatus(db: RoomRelayDatabase, profile: UserProfile): AssistantReply {
       urgency(left) - urgency(right) || left.startAt.localeCompare(right.startAt),
   );
 
-  const cards = ordered.slice(0, 5).map((booking): AssistantCard => {
+  const cards = await Promise.all(
+    ordered.slice(0, 5).map(async (booking): Promise<AssistantCard> => {
     let detail: string | undefined;
 
     if (booking === startedNotCheckedIn) {
       detail = "Started — check in when you arrive";
     } else if (booking.status === "waitlisted") {
-      const standing = getWaitlistStanding(db, booking.id);
+      const standing = await getWaitlistStanding(db, booking.id);
       detail = standing ? `Number ${standing.position} on the waitlist` : undefined;
     } else if (booking.status === "checked_in") {
       detail = "Check out when you leave";
@@ -778,50 +779,51 @@ function myStatus(db: RoomRelayDatabase, profile: UserProfile): AssistantReply {
             ? "Check in"
             : "Open",
     };
-  });
+    }),
+  );
 
   return reply(lines.join("\n"), cards);
 }
 
-function managerAttention(db: RoomRelayDatabase, profile: UserProfile): AssistantReply {
+async function managerAttention(db: RoomRelayDatabase, profile: UserProfile): Promise<AssistantReply> {
   const nowIso = new Date().toISOString();
   const scope = profile.role === "admin" ? "1 = 1" : "r.manager_id = ?";
   const parameters = profile.role === "admin" ? [] : [profile.id];
 
-  const pending = db
+  const pending = (await db
     .prepare(
       `SELECT b.id, b.start_at, b.end_at, r.name AS room_name, p.display_name AS requester_name
        FROM bookings b
        JOIN rooms r ON r.id = b.room_id
        JOIN profiles p ON p.id = b.requester_id
-       WHERE ${scope} AND b.status = 'pending' AND julianday(b.start_at) > julianday(?)
+       WHERE ${scope} AND b.status = 'pending' AND b.start_at > ?
        ORDER BY b.start_at
        LIMIT 50`,
     )
-    .all(...parameters, nowIso) as Array<{
+    .all([...parameters, nowIso])) as Array<{
     id: string;
     start_at: string;
     end_at: string;
     room_name: string;
     requester_name: string;
   }>;
-  const overdue = db
+  const overdue = (await db
     .prepare(
       `SELECT b.id, b.end_at, r.name AS room_name, p.display_name AS requester_name
        FROM bookings b
        JOIN rooms r ON r.id = b.room_id
        JOIN profiles p ON p.id = b.requester_id
-       WHERE ${scope} AND b.status = 'checked_in' AND julianday(b.end_at) < julianday(?)
+       WHERE ${scope} AND b.status = 'checked_in' AND b.end_at < ?
        ORDER BY b.end_at`,
     )
-    .all(...parameters, nowIso) as Array<{
+    .all([...parameters, nowIso])) as Array<{
     id: string;
     end_at: string;
     room_name: string;
     requester_name: string;
   }>;
   const incidents = (
-    db
+    (await db
       .prepare(
         `SELECT count(*) AS count
          FROM incidents i
@@ -829,7 +831,7 @@ function managerAttention(db: RoomRelayDatabase, profile: UserProfile): Assistan
          JOIN rooms r ON r.id = b.room_id
          WHERE ${scope} AND i.status IN ('open', 'reviewing')`,
       )
-      .get(...parameters) as { count: number }
+      .get(parameters)) as { count: number }
   ).count;
 
   const lines: string[] = [];
@@ -915,21 +917,21 @@ export function assistantSuggestions(role: UserProfile["role"]): string[] {
 
 export const MAX_ASSISTANT_MESSAGE = 400;
 
-export function answerAssistant(
+export async function answerAssistant(
   db: RoomRelayDatabase,
   profile: UserProfile,
   message: string,
-): AssistantReply {
+): Promise<AssistantReply> {
   const trimmed = message.trim().slice(0, MAX_ASSISTANT_MESSAGE);
 
   if (!trimmed) {
     return reply(ASSISTANT_GREETING[profile.role], [], HELP_SUGGESTIONS[profile.role]);
   }
 
-  const options = getRoomFilterOptions(db);
-  const rooms = db
+  const options = await getRoomFilterOptions(db);
+  const rooms = (await db
     .prepare("SELECT code, name FROM rooms WHERE status = 'active' ORDER BY code")
-    .all() as Array<{ code: string; name: string }>;
+    .all()) as Array<{ code: string; name: string }>;
   const today = campusToday();
   const context: ParseContext = {
     today,
@@ -940,7 +942,9 @@ export function answerAssistant(
   };
   const parsed = parseQuery(trimmed, context);
   const text = parsed.normalized;
-  const room = parsed.roomCode ? getRoomDetail(db, profile, parsed.roomCode, null) : null;
+  const room = parsed.roomCode
+    ? await getRoomDetail(db, profile, parsed.roomCode, null)
+    : null;
 
   if (
     has(text, /^(hi|hello|hey|hiya|yo|good (morning|afternoon|evening)|help|\?)$/) ||
@@ -969,7 +973,7 @@ export function answerAssistant(
     !asksHow &&
     has(text, /\b(attention|to ?do|queue|pending|waiting|overdue|what's up|whats up|summary|my day|anything new)\b/)
   ) {
-    return managerAttention(db, profile);
+    return await managerAttention(db, profile);
   }
 
   const asksStatus =
@@ -977,11 +981,11 @@ export function answerAssistant(
     has(text, /^my (bookings?|requests?|reservations?)$/);
 
   if (asksStatus && !asksHow) {
-    return profile.role === "student" ? myStatus(db, profile) : managerAttention(db, profile);
+    return profile.role === "student" ? await myStatus(db, profile) : await managerAttention(db, profile);
   }
 
   if (room && !asksHow && (parsed.date || parsed.startTime || has(text, /\b(free|available|booked)\b/))) {
-    return checkOneRoom(db, profile, room, parsed);
+    return await checkOneRoom(db, profile, room, parsed);
   }
 
   for (const topic of TOPICS) {
@@ -995,7 +999,7 @@ export function answerAssistant(
   }
 
   if (has(text, /\b(what|which|list|show)( are the)? (rooms|spaces)\b|\ball (the )?rooms\b/)) {
-    const all = searchRooms(
+    const all = await searchRooms(
       db,
       profile,
       { minCapacity: parsed.capacity, building: parsed.building, facilities: parsed.facilities },
@@ -1011,7 +1015,7 @@ export function answerAssistant(
   }
 
   if (wantsSearch || hasSearchTerms) {
-    return findRooms(db, profile, parsed);
+    return await findRooms(db, profile, parsed);
   }
 
   return reply(

@@ -235,11 +235,11 @@ function mapIncident(row: IncidentRow): IncidentQueueItem {
   };
 }
 
-export function listIncidents(
+export async function listIncidents(
   db: RoomRelayDatabase,
   actor: UserProfile,
   filters: IncidentQueueFilters,
-): IncidentQueueResult {
+): Promise<IncidentQueueResult> {
   const empty = {
     items: [],
     total: 0,
@@ -268,7 +268,7 @@ export function listIncidents(
   }
 
   if (filters.roomCode) {
-    conditions.push("room.code = ? COLLATE NOCASE");
+    conditions.push("lower(room.code) = lower(?)");
     parameters.push(filters.roomCode);
   }
 
@@ -284,7 +284,7 @@ export function listIncidents(
   }
 
   const where = conditions.join(" AND ");
-  const countRows = db
+  const countRows = (await db
     .prepare(
       `SELECT incident.status, count(*) AS count
        FROM incidents incident
@@ -293,14 +293,14 @@ export function listIncidents(
        WHERE ${scope.sql}
        GROUP BY incident.status`,
     )
-    .all(...scope.parameters) as Array<{ status: IncidentStatus; count: number }>;
+    .all(scope.parameters)) as Array<{ status: IncidentStatus; count: number }>;
 
   const counts = { open: 0, reviewing: 0, resolved: 0 };
   for (const row of countRows) {
     counts[row.status] = row.count;
   }
 
-  const countRow = db
+  const countRow = (await db
     .prepare(
       `SELECT count(*) AS count
        FROM incidents incident
@@ -308,7 +308,7 @@ export function listIncidents(
        JOIN rooms room ON room.id = booking.room_id
        WHERE ${where}`,
     )
-    .get(...parameters) as { count: number };
+    .get(parameters)) as { count: number };
 
   const total = countRow.count;
   const page = Math.min(
@@ -317,16 +317,16 @@ export function listIncidents(
   );
   const offset = (page - 1) * PAGE_SIZE;
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `${INCIDENT_SELECT}
        WHERE ${where}
        ORDER BY incident.created_at ASC, incident.id ASC
        LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
     )
-    .all(...parameters) as IncidentRow[];
+    .all(parameters)) as IncidentRow[];
 
-  const rooms = db
+  const rooms = (await db
     .prepare(
       `SELECT DISTINCT room.code, room.name
        FROM incidents incident
@@ -335,7 +335,7 @@ export function listIncidents(
        WHERE ${scope.sql}
        ORDER BY room.name`,
     )
-    .all(...scope.parameters) as Array<{ code: string; name: string }>;
+    .all(scope.parameters)) as Array<{ code: string; name: string }>;
 
   return {
     items: rows.map(mapIncident),
@@ -347,11 +347,11 @@ export function listIncidents(
   };
 }
 
-export function getBookingIncidents(
+export async function getBookingIncidents(
   db: RoomRelayDatabase,
   bookingId: string,
-): BookingIncidentItem[] {
-  const rows = db
+): Promise<BookingIncidentItem[]> {
+  const rows = (await db
     .prepare(
       `SELECT
          id, status, category, description, created_at, resolution_note
@@ -359,7 +359,7 @@ export function getBookingIncidents(
        WHERE booking_id = ?
        ORDER BY created_at ASC, id ASC`,
     )
-    .all(bookingId) as Array<{
+    .all(bookingId)) as Array<{
     id: string;
     status: IncidentStatus;
     category: IncidentCategory;
@@ -380,17 +380,17 @@ export function getBookingIncidents(
   }));
 }
 
-export function getIncidentDetail(
+export async function getIncidentDetail(
   db: RoomRelayDatabase,
   actor: UserProfile,
   incidentId: string,
-): IncidentDetail | null {
+): Promise<IncidentDetail | null> {
   if (!isActiveProfile(actor)) {
     return null;
   }
 
   const scope = scopeFor(actor);
-  const row = db
+  const row = (await db
     .prepare(
       `${INCIDENT_SELECT}
        WHERE incident.id = ?
@@ -399,20 +399,20 @@ export function getIncidentDetail(
            OR booking.requester_id = ?
          )`,
     )
-    .get(incidentId, ...scope.parameters, actor.id) as IncidentRow | undefined;
+    .get([incidentId, ...scope.parameters, actor.id])) as IncidentRow | undefined;
 
   if (!row) {
     return null;
   }
 
-  const condition = db
+  const condition = (await db
     .prepare(
       `SELECT id, condition_state, notes, created_at
        FROM condition_reports
        WHERE booking_id = ? AND stage = 'after'
        LIMIT 1`,
     )
-    .get(row.booking_id) as
+    .get(row.booking_id)) as
     | {
         id: string;
         condition_state: "left_as_found" | "issue_found";

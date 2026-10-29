@@ -10,7 +10,7 @@ function hrefs(role: Parameters<typeof navigationFor>[0]): string[] {
 }
 
 describe("workspace navigation", () => {
-  it("keeps discovery and check-in in the student journey", () => {
+  it("keeps discovery and check-in in the student journey", async () => {
     expect(hrefs("student")).toEqual([
       "/app",
       "/app/rooms",
@@ -20,7 +20,7 @@ describe("workspace navigation", () => {
     ]);
   });
 
-  it("gives staff management links and the access log without student actions", () => {
+  it("gives staff management links and the access log without student actions", async () => {
     for (const role of ["manager", "admin"] as const) {
       expect(hrefs(role)).toEqual([
         "/app",
@@ -35,7 +35,7 @@ describe("workspace navigation", () => {
     }
   });
 
-  it("keeps admin room copy distinct and scoped counts intact", () => {
+  it("keeps admin room copy distinct and scoped counts intact", async () => {
     const adminGroups = navigationFor("admin", counts);
     const managerGroups = navigationFor("manager", counts);
     const adminItems = adminGroups.flatMap((group) => group.items);

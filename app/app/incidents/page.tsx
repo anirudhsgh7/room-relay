@@ -46,7 +46,7 @@ export default async function IncidentsPage({
 
   const raw = await searchParams;
   const parsed = parseIncidentFilters(raw);
-  const result = listIncidents(getDatabase(), profile, parsed.filters);
+  const result = await listIncidents(getDatabase(), profile, parsed.filters);
   const isAdmin = profile.role === "admin";
 
   return (

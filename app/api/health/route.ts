@@ -10,10 +10,10 @@ export async function GET() {
 
   try {
     const db = getDatabase();
-    db.prepare("SELECT 1").get();
-    const migrationRow = db
+    await db.prepare("SELECT 1").get();
+    const migrationRow = (await db
       .prepare("SELECT count(*) AS count FROM schema_migrations")
-      .get() as { count: number };
+      .get()) as { count: number };
     getSessionSecret();
 
     return NextResponse.json(

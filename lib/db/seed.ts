@@ -154,8 +154,13 @@ function atNextWeekdayUtcDate(
   return value.toISOString();
 }
 
-function countRows(db: RoomRelayDatabase, table: string): number {
-  const row = db.prepare(`SELECT count(*) AS count FROM ${table}`).get() as {
+async function countRows(
+  db: RoomRelayDatabase,
+  table: string,
+): Promise<number> {
+  const row = (await db
+    .prepare(`SELECT count(*) AS count FROM ${table}`)
+    .get()) as {
     count: number;
   };
   return row.count;
@@ -197,7 +202,7 @@ export async function seedDatabase(
   const incidentReviewStart = atUtcDate(now, -7, 14);
   const incidentReviewEnd = atUtcDate(now, -7, 15);
 
-  const seed = db.transaction(() => {
+  const seed = db.transaction(async () => {
     const upsertProfile = db.prepare(`
       INSERT INTO profiles (
         id, email, display_name, role, status, password_hash, created_at, updated_at
@@ -214,7 +219,7 @@ export async function seedDatabase(
     `);
 
     for (const profile of hashedProfiles) {
-      upsertProfile.run({
+      await upsertProfile.run({
         id: profile.id,
         email: profile.email,
         display_name: profile.displayName,
@@ -242,7 +247,7 @@ export async function seedDatabase(
     const newlySeededRoomIds = new Set<string>();
 
     for (const room of seedRooms) {
-      const inserted = upsertRoom.run({
+      const inserted = await upsertRoom.run({
         id: room.id,
         code: room.code,
         name: room.name,
@@ -285,7 +290,7 @@ export async function seedDatabase(
       }
 
       for (let weekday = 1; weekday <= 5; weekday += 1) {
-        upsertAvailability.run({
+        await upsertAvailability.run({
           id: `${hours.roomId}_weekday_${weekday}`,
           room_id: hours.roomId,
           weekday,
@@ -307,7 +312,7 @@ export async function seedDatabase(
       ON CONFLICT(id) DO NOTHING
     `);
 
-    upsertRequirement.run({
+    await upsertRequirement.run({
       id: "req_seminar_club_briefing",
       room_id: "room_seminar_02",
       requirement_type: "club_safety_briefing",
@@ -316,7 +321,7 @@ export async function seedDatabase(
       required: 1,
       now: nowIso,
     });
-    upsertRequirement.run({
+    await upsertRequirement.run({
       id: "req_media_equipment_induction",
       room_id: "room_media_studio",
       requirement_type: "equipment_induction",
@@ -367,7 +372,7 @@ export async function seedDatabase(
 
     for (const policy of roomPolicies) {
       if (newlySeededRoomIds.has(policy.room_id)) {
-        upsertPolicy.run({ ...policy, now: nowIso });
+        await upsertPolicy.run({ ...policy, now: nowIso });
       }
     }
 
@@ -387,7 +392,7 @@ export async function seedDatabase(
         updated_at = excluded.updated_at
     `);
 
-    upsertProfileEligibility.run({
+    await upsertProfileEligibility.run({
       id: "elig_amelia_seminar_briefing",
       profile_id: "usr_amelia_chen",
       requirement_id: "req_seminar_club_briefing",
@@ -398,7 +403,7 @@ export async function seedDatabase(
       ).toISOString(),
       now: nowIso,
     });
-    upsertProfileEligibility.run({
+    await upsertProfileEligibility.run({
       id: "elig_amelia_media_induction",
       profile_id: "usr_amelia_chen",
       requirement_id: "req_media_equipment_induction",
@@ -652,7 +657,7 @@ export async function seedDatabase(
     const bookingExists = db.prepare("SELECT 1 FROM bookings WHERE id = ?");
 
     for (const booking of bookings) {
-      if (bookingExists.get(booking.id)) {
+      if (await bookingExists.get(booking.id)) {
         continue;
       }
 
@@ -661,7 +666,7 @@ export async function seedDatabase(
       const openIncident = booking.id === "booking_incident_open";
       const reviewIncident = booking.id === "booking_incident_reviewing";
 
-      insertBooking.run({
+      await insertBooking.run({
         ...booking,
         eligibility_snapshot_json:
           booking.id === "booking_pending_media" ||
@@ -811,7 +816,7 @@ export async function seedDatabase(
     ] as const;
 
     for (const credential of credentials) {
-      upsertCredential.run(credential);
+      await upsertCredential.run(credential);
     }
 
     const insertAccessEvent = db.prepare(`
@@ -827,7 +832,7 @@ export async function seedDatabase(
       ON CONFLICT(id) DO NOTHING
     `);
 
-    insertAccessEvent.run({
+    await insertAccessEvent.run({
       id: "access_completed_allowed",
       credential_id: "cred_amelia_active",
       attempted_credential_ref: "demo-tag-amelia-014",
@@ -844,7 +849,7 @@ export async function seedDatabase(
       request_hash: "seed-access-hash-allowed",
     });
 
-    insertAccessEvent.run({
+    await insertAccessEvent.run({
       id: "access_revoked_denied",
       credential_id: "cred_amelia_revoked",
       attempted_credential_ref: "demo-tag-amelia-old-007",
@@ -861,7 +866,7 @@ export async function seedDatabase(
       request_hash: "seed-access-hash-revoked",
     });
 
-    insertAccessEvent.run({
+    await insertAccessEvent.run({
       id: "access_unknown_denied",
       credential_id: null,
       attempted_credential_ref: "demo-tag-unmapped-999",
@@ -928,7 +933,7 @@ export async function seedDatabase(
     ] as const;
 
     for (const report of conditionReports) {
-      insertConditionReport.run(report);
+      await insertConditionReport.run(report);
     }
 
     const insertIncident = db.prepare(`
@@ -946,7 +951,7 @@ export async function seedDatabase(
       ON CONFLICT(id) DO NOTHING
     `);
 
-    insertIncident.run({
+    await insertIncident.run({
       id: "incident_equipment_open",
       booking_id: "booking_incident_open",
       category: "equipment",
@@ -968,7 +973,7 @@ export async function seedDatabase(
       resolved_at: null,
     });
 
-    insertIncident.run({
+    await insertIncident.run({
       id: "incident_light_reviewing",
       booking_id: "booking_incident_reviewing",
       category: "equipment",
@@ -1187,24 +1192,24 @@ export async function seedDatabase(
     ] as const;
 
     for (const event of auditEvents) {
-      insertAuditEvent.run(event);
+      await insertAuditEvent.run(event);
     }
   });
 
-  seed();
+  await seed.immediate();
 
   return {
-    profiles: countRows(db, "profiles"),
-    rooms: countRows(db, "rooms"),
-    availabilityRules: countRows(db, "availability_rules"),
-    eligibilityRequirements: countRows(db, "eligibility_requirements"),
-    roomPolicies: countRows(db, "room_booking_policies"),
-    profileEligibility: countRows(db, "profile_eligibility"),
-    bookings: countRows(db, "bookings"),
-    credentials: countRows(db, "credentials"),
-    accessEvents: countRows(db, "access_events"),
-    auditEvents: countRows(db, "audit_events"),
-    conditionReports: countRows(db, "condition_reports"),
-    incidents: countRows(db, "incidents"),
+    profiles: await countRows(db, "profiles"),
+    rooms: await countRows(db, "rooms"),
+    availabilityRules: await countRows(db, "availability_rules"),
+    eligibilityRequirements: await countRows(db, "eligibility_requirements"),
+    roomPolicies: await countRows(db, "room_booking_policies"),
+    profileEligibility: await countRows(db, "profile_eligibility"),
+    bookings: await countRows(db, "bookings"),
+    credentials: await countRows(db, "credentials"),
+    accessEvents: await countRows(db, "access_events"),
+    auditEvents: await countRows(db, "audit_events"),
+    conditionReports: await countRows(db, "condition_reports"),
+    incidents: await countRows(db, "incidents"),
   };
 }

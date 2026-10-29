@@ -89,7 +89,7 @@ export default async function RoomDetailPage({
   const rawParams = await searchParams;
   const parsed = parseRoomSearchParams(rawParams);
   const interval = parsed.ok ? parsed.interval : null;
-  const room = getRoomDetail(getDatabase(), profile, code, interval);
+  const room = await getRoomDetail(getDatabase(), profile, code, interval);
 
   if (!room) {
     notFound();

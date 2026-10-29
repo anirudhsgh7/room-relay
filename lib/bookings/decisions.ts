@@ -156,11 +156,11 @@ function fieldErrors(error: z.ZodError): DecisionFieldErrors {
   return result;
 }
 
-function loadDecisionBooking(
+async function loadDecisionBooking(
   db: RoomRelayDatabase,
   bookingId: string,
-): DecisionBookingRow | null {
-  const row = db
+): Promise<DecisionBookingRow | null> {
+  const row = (await db
     .prepare(
       `SELECT
          b.id, b.room_id, b.requester_id, b.start_at, b.end_at,
@@ -170,7 +170,7 @@ function loadDecisionBooking(
        JOIN rooms r ON r.id = b.room_id
        WHERE b.id = ?`,
     )
-    .get(bookingId) as DecisionBookingRow | undefined;
+    .get(bookingId)) as DecisionBookingRow | undefined;
 
   return row ?? null;
 }
@@ -190,7 +190,7 @@ function canManageBookingRoom(
   return actor.role === "manager" && row.manager_id === actor.id;
 }
 
-function insertDecisionAudit(
+async function insertDecisionAudit(
   db: RoomRelayDatabase,
   input: {
     actor: UserProfile;
@@ -201,8 +201,8 @@ function insertDecisionAudit(
     correlationId: string;
     metadata: Record<string, unknown>;
   },
-): void {
-  db.prepare(
+): Promise<void> {
+  await db.prepare(
     `INSERT INTO audit_events (
        id, actor_id, action, entity_type, entity_id, occurred_at,
        summary, correlation_id, metadata_json
@@ -234,11 +234,11 @@ function safeRequirements(requirements: RoomRequirement[]): SafeRequirement[] {
  * SQLite transaction so current policy, eligibility, and conflicts cannot
  * change between validation and the update.
  */
-export function decideBooking(
+export async function decideBooking(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: DecisionInput,
-): DecisionResult {
+): Promise<DecisionResult> {
   const parsed = decisionSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -279,8 +279,8 @@ export function decideBooking(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): DecisionResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<DecisionResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor || (freshActor.role !== "manager" && freshActor.role !== "admin")) {
         return {
@@ -290,7 +290,7 @@ export function decideBooking(
         };
       }
 
-      const booking = loadDecisionBooking(db, data.bookingId);
+      const booking = await loadDecisionBooking(db, data.bookingId);
 
       if (!booking) {
         return {
@@ -328,7 +328,7 @@ export function decideBooking(
       if (request.action === "reject") {
         const nowIso = new Date().toISOString();
         const priorStatus = booking.status;
-        const update = db
+        const update = await db
           .prepare(
             `UPDATE bookings
              SET status = 'rejected',
@@ -359,7 +359,7 @@ export function decideBooking(
           };
         }
 
-        insertDecisionAudit(db, {
+        await insertDecisionAudit(db, {
           actor: freshActor,
           bookingId: booking.id,
           action: "booking.rejected",
@@ -373,7 +373,7 @@ export function decideBooking(
           },
         });
 
-        createNotification(db, {
+        await createNotification(db, {
           recipientId: booking.requester_id,
           kind: "decision_rejected",
           title: `Request not approved: ${booking.room_name}`,
@@ -400,7 +400,7 @@ export function decideBooking(
         };
       }
 
-      const requester = getProfileById(db, booking.requester_id);
+      const requester = await getProfileById(db, booking.requester_id);
 
       if (!requester) {
         return {
@@ -411,7 +411,7 @@ export function decideBooking(
         };
       }
 
-      const room = getRoomDetail(
+      const room = await getRoomDetail(
         db,
         requester,
         booking.room_code,
@@ -475,14 +475,14 @@ export function decideBooking(
       }
 
       if (
-        !checkRoomSchedule(
+        !(await checkRoomSchedule(
           db,
           room.id,
           local.date,
           local.weekday,
           local.startMinutes,
           local.endMinutes,
-        )
+        ))
       ) {
         return {
           ok: false,
@@ -541,7 +541,7 @@ export function decideBooking(
           ? outstanding.map((requirement) => requirement.id)
           : [];
 
-      const [blackout] = findOverlappingBlackouts(
+      const [blackout] = await findOverlappingBlackouts(
         db,
         room.id,
         booking.start_at,
@@ -556,7 +556,7 @@ export function decideBooking(
         };
       }
 
-      const standing = getReviewStanding(db, booking.id);
+      const standing = await getReviewStanding(db, booking.id);
       const outranking = standing?.ahead ?? [];
       const exceptionReason = data.allocationExceptionReason;
 
@@ -581,13 +581,13 @@ export function decideBooking(
       const allocationException =
         outranking.length > 0 ? exceptionReason : null;
 
-      const conflict = getBlockingBookings(
+      const conflict = (await getBlockingBookings(
         db,
         room.id,
         booking.start_at,
         booking.end_at,
         room.policy.bufferMinutes,
-      ).filter((blocker) => blocker.id !== booking.id);
+      )).filter((blocker) => blocker.id !== booking.id);
 
       if (conflict.length > 0) {
         return {
@@ -599,7 +599,7 @@ export function decideBooking(
       }
 
       const nowIso = new Date().toISOString();
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE bookings
            SET status = 'approved',
@@ -634,7 +634,7 @@ export function decideBooking(
         };
       }
 
-      insertDecisionAudit(db, {
+      await insertDecisionAudit(db, {
         actor: freshActor,
         bookingId: booking.id,
         action: "booking.approved",
@@ -663,7 +663,7 @@ export function decideBooking(
         },
       });
 
-      createNotification(db, {
+      await createNotification(db, {
         recipientId: booking.requester_id,
         kind: "decision_approved",
         title: `Approved: ${room.name}`,
@@ -676,7 +676,7 @@ export function decideBooking(
         createdAt: nowIso,
       });
 
-      const settled = settleConflictsAfterApproval(db, {
+      const settled = await settleConflictsAfterApproval(db, {
         booking: {
           id: booking.id,
           roomId: room.id,
@@ -704,7 +704,7 @@ export function decideBooking(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 

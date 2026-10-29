@@ -42,8 +42,8 @@ export default async function WorkspaceLayout({
   const db = getDatabase();
   // Reminders need no separate scheduler: page loads deliver anything due,
   // at most once a minute per server process.
-  maybeRunReminderSweep(db);
-  const counts = getWorkspaceCounts(db, profile);
+  await maybeRunReminderSweep(db);
+  const counts = await getWorkspaceCounts(db, profile);
 
   return (
     <div className="min-h-screen bg-sand-50 lg:grid lg:grid-cols-[17.5rem_1fr]">

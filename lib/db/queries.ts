@@ -21,12 +21,12 @@ export interface FoundationSnapshot {
   institutionPendingBookings: number | null;
 }
 
-function count(
+async function count(
   db: RoomRelayDatabase,
   sql: string,
   ...parameters: string[]
-): number {
-  const row = db.prepare(sql).get(...parameters) as { count: number };
+): Promise<number> {
+  const row = (await db.prepare(sql).get(parameters)) as { count: number };
   return row.count;
 }
 
@@ -34,32 +34,32 @@ function count(
  * Returns only fields that the signed-in role may see. This is intentionally a
  * narrow server-side projection rather than a generic table API.
  */
-export function getFoundationSnapshot(
+export async function getFoundationSnapshot(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): FoundationSnapshot {
+): Promise<FoundationSnapshot> {
   const isAdmin = profile.role === "admin";
   const isManager = profile.role === "manager";
 
-  const activeRooms = count(
+  const activeRooms = await count(
     db,
     "SELECT count(*) AS count FROM rooms WHERE status = 'active'",
   );
-  const totalRooms = count(db, "SELECT count(*) AS count FROM rooms");
+  const totalRooms = await count(db, "SELECT count(*) AS count FROM rooms");
 
   const assignedRooms = isManager
-    ? (db
+    ? ((await db
         .prepare(
           `SELECT code, name
            FROM rooms
            WHERE manager_id = ? AND status = 'active'
            ORDER BY code`,
         )
-        .all(profile.id) as AssignedRoom[])
+        .all(profile.id)) as AssignedRoom[])
     : [];
 
   const managedPendingBookings = isManager
-    ? count(
+    ? await count(
         db,
         `SELECT count(*) AS count
          FROM bookings b
@@ -71,7 +71,7 @@ export function getFoundationSnapshot(
 
   const ownActiveBookings =
     profile.role === "student"
-      ? count(
+      ? await count(
           db,
           `SELECT count(*) AS count
            FROM bookings
@@ -82,7 +82,7 @@ export function getFoundationSnapshot(
 
   const ownActiveCredentials =
     profile.role === "student"
-      ? count(
+      ? await count(
           db,
           "SELECT count(*) AS count FROM credentials WHERE user_id = ? AND active = 1",
           profile.id,
@@ -92,7 +92,7 @@ export function getFoundationSnapshot(
   return {
     activeRooms,
     totalRooms,
-    migrationsApplied: count(
+    migrationsApplied: await count(
       db,
       "SELECT count(*) AS count FROM schema_migrations",
     ),
@@ -101,19 +101,19 @@ export function getFoundationSnapshot(
     ownActiveBookings,
     ownActiveCredentials,
     institutionProfiles: isAdmin
-      ? count(db, "SELECT count(*) AS count FROM profiles")
+      ? await count(db, "SELECT count(*) AS count FROM profiles")
       : null,
     institutionActiveProfiles: isAdmin
-      ? count(
+      ? await count(
           db,
           "SELECT count(*) AS count FROM profiles WHERE status = 'active'",
         )
       : null,
     institutionCredentials: isAdmin
-      ? count(db, "SELECT count(*) AS count FROM credentials")
+      ? await count(db, "SELECT count(*) AS count FROM credentials")
       : null,
     institutionPendingBookings: isAdmin
-      ? count(
+      ? await count(
           db,
           "SELECT count(*) AS count FROM bookings WHERE status = 'pending'",
         )

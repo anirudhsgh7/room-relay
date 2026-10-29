@@ -83,10 +83,10 @@ function dayWord(startAt: string, nowIso: string): string {
  * Delivers every reminder that is due at `now`. Safe to run as often as you
  * like: each reminder has a dedupe key, so re-running never duplicates one.
  */
-export function runReminderSweep(
+export async function runReminderSweep(
   db: RoomRelayDatabase,
   now = new Date(),
-): ReminderSweepResult {
+): Promise<ReminderSweepResult> {
   const nowMs = now.getTime();
   const nowIso = now.toISOString();
   const result: ReminderSweepResult = {
@@ -97,18 +97,18 @@ export function runReminderSweep(
     lapsedNotices: 0,
   };
 
-  const sweep = db.transaction(() => {
+  const sweep = db.transaction(async () => {
     // 1. Upcoming approved bookings: one reminder the day before, one within
     //    the hour. A late sweep sends only the most relevant one.
-    const upcoming = db
+    const upcoming = (await db
       .prepare(
         `${ROW_SELECT}
          WHERE b.status = 'approved'
-           AND julianday(b.start_at) > julianday(?)
-           AND julianday(b.start_at) <= julianday(?)
+           AND b.start_at > ?
+           AND b.start_at <= ?
          ORDER BY b.start_at`,
       )
-      .all(nowIso, iso(nowMs + REMINDER_WINDOWS.dayBeforeMs)) as ReminderRow[];
+      .all([nowIso, iso(nowMs + REMINDER_WINDOWS.dayBeforeMs)])) as ReminderRow[];
 
     for (const booking of upcoming) {
       const startMs = Date.parse(booking.start_at);
@@ -116,7 +116,7 @@ export function runReminderSweep(
       const slot = formatCampusDateTime(booking.start_at, booking.end_at);
 
       if (withinHour) {
-        const sent = createNotification(db, {
+        const sent = await createNotification(db, {
           recipientId: booking.requester_id,
           kind: "reminder_start",
           title: `Starting soon: ${booking.room_name}`,
@@ -140,7 +140,7 @@ export function runReminderSweep(
         continue;
       }
 
-      const sent = createNotification(db, {
+      const sent = await createNotification(db, {
         recipientId: booking.requester_id,
         kind: "reminder_start",
         title: `Coming up ${dayWord(booking.start_at, nowIso)}: ${booking.room_name}`,
@@ -155,25 +155,25 @@ export function runReminderSweep(
 
     // 2. Bookings in use: remind before the end, and flag overdue check-outs
     //    to both the requester and the room manager.
-    const inUse = db
+    const inUse = (await db
       .prepare(
         `${ROW_SELECT}
          WHERE b.status = 'checked_in'
-           AND julianday(b.end_at) <= julianday(?)
-           AND julianday(b.end_at) > julianday(?)
+           AND b.end_at <= ?
+           AND b.end_at > ?
          ORDER BY b.end_at`,
       )
-      .all(
+      .all([
         iso(nowMs + REMINDER_WINDOWS.checkoutBeforeEndMs),
         iso(nowMs - REMINDER_WINDOWS.lookbackMs),
-      ) as ReminderRow[];
+      ])) as ReminderRow[];
 
     for (const booking of inUse) {
       const endMs = Date.parse(booking.end_at);
       const endLabel = formatCampusTime(booking.end_at);
 
       if (nowMs - endMs >= REMINDER_WINDOWS.overdueAfterEndMs) {
-        const toRequester = createNotification(db, {
+        const toRequester = await createNotification(db, {
           recipientId: booking.requester_id,
           kind: "checkout_overdue",
           title: `Please check out of ${booking.room_name}`,
@@ -186,7 +186,7 @@ export function runReminderSweep(
 
         const toManager =
           booking.manager_status === "active"
-            ? createNotification(db, {
+            ? await createNotification(db, {
                 recipientId: booking.manager_id,
                 kind: "checkout_overdue",
                 title: `Not checked out: ${booking.room_name}`,
@@ -202,7 +202,7 @@ export function runReminderSweep(
         continue;
       }
 
-      const sent = createNotification(db, {
+      const sent = await createNotification(db, {
         recipientId: booking.requester_id,
         kind: "reminder_checkout",
         title: `Time to wrap up in ${booking.room_name}`,
@@ -216,25 +216,25 @@ export function runReminderSweep(
     }
 
     // 3. Requests nobody has decided yet that start within a day.
-    const undecided = db
+    const undecided = (await db
       .prepare(
         `${ROW_SELECT}
          WHERE b.status = 'pending'
-           AND julianday(b.start_at) > julianday(?)
-           AND julianday(b.start_at) <= julianday(?)
+           AND b.start_at > ?
+           AND b.start_at <= ?
          ORDER BY b.start_at`,
       )
-      .all(
+      .all([
         nowIso,
         iso(nowMs + REMINDER_WINDOWS.decisionNeededBeforeStartMs),
-      ) as ReminderRow[];
+      ])) as ReminderRow[];
 
     for (const booking of undecided) {
       if (booking.manager_status !== "active") {
         continue;
       }
 
-      const sent = createNotification(db, {
+      const sent = await createNotification(db, {
         recipientId: booking.manager_id,
         kind: "decision_needed",
         title: `Decision needed soon: ${booking.room_name}`,
@@ -251,18 +251,18 @@ export function runReminderSweep(
     }
 
     // 4. Close the loop on requests whose time passed without an outcome.
-    const lapsed = db
+    const lapsed = (await db
       .prepare(
         `${ROW_SELECT}
          WHERE b.status IN ('pending', 'waitlisted')
-           AND julianday(b.start_at) <= julianday(?)
-           AND julianday(b.start_at) > julianday(?)`,
+           AND b.start_at <= ?
+           AND b.start_at > ?`,
       )
-      .all(nowIso, iso(nowMs - REMINDER_WINDOWS.lookbackMs)) as ReminderRow[];
+      .all([nowIso, iso(nowMs - REMINDER_WINDOWS.lookbackMs)])) as ReminderRow[];
 
     for (const booking of lapsed) {
       const waitlisted = booking.status === "waitlisted";
-      const sent = createNotification(db, {
+      const sent = await createNotification(db, {
         recipientId: booking.requester_id,
         kind: waitlisted ? "waitlist_lapsed" : "request_lapsed",
         title: waitlisted
@@ -286,7 +286,7 @@ export function runReminderSweep(
     }
   });
 
-  sweep.immediate();
+  await sweep.immediate();
   return result;
 }
 
@@ -299,11 +299,11 @@ const globalForSweep = globalThis as typeof globalThis & {
  * page loads so reminders work without a separate scheduler; `npm run
  * reminders` (for cron) runs the same sweep on demand.
  */
-export function maybeRunReminderSweep(
+export async function maybeRunReminderSweep(
   db: RoomRelayDatabase,
   now = new Date(),
   minimumIntervalMs = MINUTE,
-): ReminderSweepResult | null {
+): Promise<ReminderSweepResult | null> {
   const last = globalForSweep.__roomRelayLastReminderSweep ?? 0;
 
   if (now.getTime() - last < minimumIntervalMs) {
@@ -313,7 +313,7 @@ export function maybeRunReminderSweep(
   globalForSweep.__roomRelayLastReminderSweep = now.getTime();
 
   try {
-    return runReminderSweep(db, now);
+    return await runReminderSweep(db, now);
   } catch (error) {
     console.error(
       "Reminder sweep failed:",

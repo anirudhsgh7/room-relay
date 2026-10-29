@@ -1,18 +1,17 @@
-import path from "node:path";
-
 export const DEFAULT_CAMPUS_TIMEZONE = "Europe/London";
-export const DEFAULT_DATABASE_PATH = "./data/room-relay.db";
 
-export function getDatabasePath(): string {
-  const configured = process.env.ROOMRELAY_DB_PATH?.trim() || DEFAULT_DATABASE_PATH;
+export function getDatabaseUrl(): string {
+  const configured =
+    process.env.DATABASE_URL?.trim() ||
+    process.env.DATABASE_URL_UNPOOLED?.trim();
 
-  if (configured === ":memory:") {
-    return configured;
+  if (!configured) {
+    throw new Error(
+      "DATABASE_URL is required. Run `neon env pull` or set a Postgres connection string.",
+    );
   }
 
-  return path.isAbsolute(configured)
-    ? configured
-    : path.resolve(/* turbopackIgnore: true */ process.cwd(), configured);
+  return configured;
 }
 
 export function getCampusTimezone(): string {
@@ -43,15 +42,16 @@ export function getSessionSecret(): Uint8Array {
 }
 
 export function validateRuntimeConfig(): {
-  databasePathConfigured: boolean;
+  databaseConfigured: boolean;
   sessionSecretConfigured: boolean;
   campusTimezone: string;
 } {
   const secret = process.env.ROOMRELAY_SESSION_SECRET?.trim();
 
   return {
-    databasePathConfigured: Boolean(
-      process.env.ROOMRELAY_DB_PATH?.trim() || DEFAULT_DATABASE_PATH,
+    databaseConfigured: Boolean(
+      process.env.DATABASE_URL?.trim() ||
+        process.env.DATABASE_URL_UNPOOLED?.trim(),
     ),
     sessionSecretConfigured: Boolean(secret && secret.length >= 32),
     campusTimezone: getCampusTimezone(),

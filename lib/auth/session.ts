@@ -36,7 +36,7 @@ export async function getAuthenticatedProfile(): Promise<UserProfile | null> {
     return null;
   }
 
-  return getProfileById(getDatabase(), claims.subject);
+  return await getProfileById(getDatabase(), claims.subject);
 }
 
 export const getCurrentProfile = cache(

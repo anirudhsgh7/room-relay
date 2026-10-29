@@ -79,16 +79,16 @@ function actionKind(action: string): TimelineEntryKind {
  * Booking-scoped timeline assembled from append-only/auditable sources.
  * Returns null when the actor cannot read the booking.
  */
-export function getBookingTimeline(
+export async function getBookingTimeline(
   db: RoomRelayDatabase,
   actor: UserProfile,
   bookingId: string,
-): BookingTimeline | null {
+): Promise<BookingTimeline | null> {
   if (!isActiveProfile(actor)) {
     return null;
   }
 
-  const booking = db
+  const booking = (await db
     .prepare(
       `SELECT
          b.id, b.requester_id, r.name AS room_name, r.manager_id
@@ -96,7 +96,7 @@ export function getBookingTimeline(
        JOIN rooms r ON r.id = b.room_id
        WHERE b.id = ?`,
     )
-    .get(bookingId) as BookingScopeRow | undefined;
+    .get(bookingId)) as BookingScopeRow | undefined;
 
   if (!booking) {
     return null;
@@ -113,7 +113,7 @@ export function getBookingTimeline(
 
   const entries: TimelineEntry[] = [];
 
-  const auditRows = db
+  const auditRows = (await db
     .prepare(
       `SELECT
          event.id, event.action, event.occurred_at, event.summary,
@@ -124,7 +124,7 @@ export function getBookingTimeline(
          AND event.entity_id = ?
        ORDER BY event.occurred_at ASC, event.id ASC`,
     )
-    .all(bookingId) as Array<{
+    .all(bookingId)) as Array<{
     id: string;
     action: string;
     occurred_at: string;
@@ -156,7 +156,7 @@ export function getBookingTimeline(
     });
   }
 
-  const accessRows = db
+  const accessRows = (await db
     .prepare(
       `SELECT
          event.id, event.result, event.reason_code, event.occurred_at,
@@ -166,7 +166,7 @@ export function getBookingTimeline(
        WHERE event.booking_id = ?
        ORDER BY event.occurred_at ASC, event.id ASC`,
     )
-    .all(bookingId) as Array<{
+    .all(bookingId)) as Array<{
     id: string;
     result: "allowed" | "denied";
     reason_code: string;
@@ -190,7 +190,7 @@ export function getBookingTimeline(
     });
   }
 
-  const conditionRows = db
+  const conditionRows = (await db
     .prepare(
       `SELECT
          report.id, report.stage, report.condition_state, report.notes,
@@ -200,7 +200,7 @@ export function getBookingTimeline(
        WHERE report.booking_id = ?
        ORDER BY report.created_at ASC, report.id ASC`,
     )
-    .all(bookingId) as Array<{
+    .all(bookingId)) as Array<{
     id: string;
     stage: "before" | "after";
     condition_state: "left_as_found" | "issue_found" | null;
@@ -225,7 +225,7 @@ export function getBookingTimeline(
     });
   }
 
-  const incidentRows = db
+  const incidentRows = (await db
     .prepare(
       `SELECT
          incident.id, incident.category, incident.description,
@@ -242,7 +242,7 @@ export function getBookingTimeline(
        WHERE incident.booking_id = ?
        ORDER BY incident.created_at ASC, incident.id ASC`,
     )
-    .all(bookingId) as Array<{
+    .all(bookingId)) as Array<{
     id: string;
     category: IncidentCategory;
     description: string;

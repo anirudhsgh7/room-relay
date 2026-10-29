@@ -70,52 +70,52 @@ const CANDIDATE_SELECT = `
   JOIN profiles requester ON requester.id = b.requester_id
 `;
 
-export function loadRoomPolicy(
+export async function loadRoomPolicy(
   db: RoomRelayDatabase,
   roomId: string,
-): RoomPolicy | null {
-  const row = db
+): Promise<RoomPolicy | null> {
+  const row = (await db
     .prepare(
       `SELECT ${POLICY_SELECT_COLUMNS}
        FROM room_booking_policies policy
        WHERE policy.room_id = ?`,
     )
-    .get(roomId) as PolicyColumns | undefined;
+    .get(roomId)) as PolicyColumns | undefined;
 
   return row ? policyFromColumns(row) : null;
 }
 
-export function bookedMinutesForFairShare(
+export async function bookedMinutesForFairShare(
   db: RoomRelayDatabase,
   requesterId: string,
   roomId: string,
   now = new Date(),
-): number {
+): Promise<number> {
   const since = new Date(
     now.getTime() - FAIR_SHARE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
-  const row = db
+  const row = (await db
     .prepare(
       `SELECT COALESCE(
-         SUM(CAST(ROUND((julianday(end_at) - julianday(start_at)) * 1440) AS INTEGER)),
+         SUM(EXTRACT(EPOCH FROM (end_at - start_at)) / 60)::integer,
          0
        ) AS minutes
        FROM bookings
        WHERE requester_id = ?
          AND room_id = ?
          AND status IN ('approved', 'checked_in', 'completed', 'incident')
-         AND julianday(end_at) > julianday(?)`,
+         AND end_at > ?`,
     )
-    .get(requesterId, roomId, since) as { minutes: number };
+    .get([requesterId, roomId, since])) as { minutes: number };
 
   return row.minutes;
 }
 
-function toCandidate(
+async function toCandidate(
   db: RoomRelayDatabase,
   row: CandidateRow,
   now: Date,
-): AllocationCandidate {
+): Promise<AllocationCandidate> {
   return {
     id: row.id,
     roomId: row.room_id,
@@ -129,9 +129,9 @@ function toCandidate(
     createdAt: row.created_at,
     status: row.status === "waitlisted" ? "waitlisted" : "pending",
     meetsRequirements:
-      getOutstandingMandatoryRequirements(db, row.room_id, row.requester_id)
+      (await getOutstandingMandatoryRequirements(db, row.room_id, row.requester_id))
         .length === 0,
-    bookedMinutes: bookedMinutesForFairShare(
+    bookedMinutes: await bookedMinutesForFairShare(
       db,
       row.requester_id,
       row.room_id,
@@ -140,14 +140,14 @@ function toCandidate(
   };
 }
 
-export function loadCandidate(
+export async function loadCandidate(
   db: RoomRelayDatabase,
   bookingId: string,
   now = new Date(),
-): AllocationCandidate | null {
-  const row = db
+): Promise<AllocationCandidate | null> {
+  const row = (await db
     .prepare(`${CANDIDATE_SELECT} WHERE b.id = ?`)
-    .get(bookingId) as CandidateRow | undefined;
+    .get(bookingId)) as CandidateRow | undefined;
 
   return row ? toCandidate(db, row, now) : null;
 }
@@ -156,7 +156,7 @@ export function loadCandidate(
  * Requests in `statuses` that conflict with [startAt, endAt) in the same room
  * under the shared buffer-aware conflict rule. The target itself is excluded.
  */
-export function loadConflictingCandidates(
+export async function loadConflictingCandidates(
   db: RoomRelayDatabase,
   input: {
     roomId: string;
@@ -167,7 +167,7 @@ export function loadConflictingCandidates(
     statuses: CompetingStatus[];
   },
   now = new Date(),
-): AllocationCandidate[] {
+): Promise<AllocationCandidate[]> {
   const allowed: CompetingStatus[] = ["pending", "waitlisted"];
   const statusList = input.statuses
     .filter((status) => allowed.includes(status))
@@ -178,14 +178,14 @@ export function loadConflictingCandidates(
     return [];
   }
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `${CANDIDATE_SELECT}
        WHERE b.room_id = @room_id
-         AND (@exclude IS NULL OR b.id <> @exclude)
+         AND (@exclude::text IS NULL OR b.id <> @exclude::text)
          AND b.status IN (${statusList})
-         AND julianday(b.start_at) < julianday(@end_at) + (@buffer / 1440.0)
-         AND julianday(b.end_at) + (@buffer / 1440.0) > julianday(@start_at)
+         AND b.start_at < @end_at::timestamptz + (@buffer * interval '1 minute')
+         AND b.end_at + (@buffer * interval '1 minute') > @start_at::timestamptz
        ORDER BY b.created_at, b.id
        LIMIT 200`,
     )
@@ -195,9 +195,9 @@ export function loadConflictingCandidates(
       start_at: input.startAt,
       end_at: input.endAt,
       buffer: input.bufferMinutes,
-    }) as CandidateRow[];
+    })) as CandidateRow[];
 
-  return rows.map((row) => toCandidate(db, row, now));
+  return Promise.all(rows.map((row) => toCandidate(db, row, now)));
 }
 
 /**
@@ -267,25 +267,25 @@ export function explainOrder(
  * requests that directly conflict with the target are counted, so the position
  * reflects the people who could actually take this slot.
  */
-export function getAllocationStanding(
+export async function getAllocationStanding(
   db: RoomRelayDatabase,
   bookingId: string,
   statuses: CompetingStatus[],
   now = new Date(),
-): AllocationStanding | null {
-  const target = loadCandidate(db, bookingId, now);
+): Promise<AllocationStanding | null> {
+  const target = await loadCandidate(db, bookingId, now);
 
   if (!target) {
     return null;
   }
 
-  const policy = loadRoomPolicy(db, target.roomId);
+  const policy = await loadRoomPolicy(db, target.roomId);
 
   if (!policy) {
     return null;
   }
 
-  const competitors = loadConflictingCandidates(
+  const competitors = await loadConflictingCandidates(
     db,
     {
       roomId: target.roomId,

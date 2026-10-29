@@ -43,7 +43,7 @@ export default async function BookingDetailPage({
   const { id } = await params;
   const query = await searchParams;
   const db = getDatabase();
-  const booking = getMyBooking(db, profile, id);
+  const booking = await getMyBooking(db, profile, id);
 
   if (!booking) {
     notFound();
@@ -54,10 +54,10 @@ export default async function BookingDetailPage({
   const justCancelled = query.cancelled === "1";
   const justCheckedOut = query.checkedout === "1";
   const canCancel = booking.canCancel;
-  const incidents = getBookingIncidents(db, booking.id);
-  const timeline = getBookingTimeline(db, profile, booking.id);
+  const incidents = await getBookingIncidents(db, booking.id);
+  const timeline = await getBookingTimeline(db, profile, booking.id);
   const waitlistStanding =
-    booking.status === "waitlisted" ? getWaitlistStanding(db, booking.id) : null;
+    booking.status === "waitlisted" ? await getWaitlistStanding(db, booking.id) : null;
   const waitlistClosed =
     booking.status === "waitlisted" && booking.hasStarted;
 

@@ -12,14 +12,14 @@ import {
   type PolicyInput,
   type WeekdayHours,
 } from "@/lib/admin/rooms";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { decideBooking } from "@/lib/bookings/decisions";
 import { seedDatabase } from "@/lib/db/seed";
 import { getRoomDetail } from "@/lib/rooms/queries";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
-type Profile = NonNullable<ReturnType<typeof getProfileById>>;
+type Profile = UserProfile;
 
 const fixedNow = new Date("2026-10-28T12:00:00.000Z");
 
@@ -55,11 +55,11 @@ function weekdays(opensAt: string, closesAt: string): WeekdayHours[] {
   }));
 }
 
-function status(testDatabase: SeededTestDatabase, id: string): string {
+async function status(testDatabase: SeededTestDatabase, id: string): Promise<string> {
   return (
-    testDatabase.db.prepare("SELECT status FROM bookings WHERE id = ?").get(id) as {
-      status: string;
-    }
+    (await testDatabase.db
+      .prepare("SELECT status FROM bookings WHERE id = ?")
+      .get(id)) as { status: string }
   ).status;
 }
 
@@ -74,10 +74,10 @@ describe("room administration", () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
-    admin = getProfileById(testDatabase.db, "usr_rowan_ellis")!;
-    marcus = getProfileById(testDatabase.db, "usr_marcus_webb")!;
-    priya = getProfileById(testDatabase.db, "usr_priya_nair")!;
-    amelia = getProfileById(testDatabase.db, "usr_amelia_chen")!;
+    admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
+    marcus = await getTestProfile(testDatabase.db, "usr_marcus_webb");
+    priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
+    amelia = await getTestProfile(testDatabase.db, "usr_amelia_chen");
   });
 
   afterEach(() => {
@@ -85,19 +85,19 @@ describe("room administration", () => {
     testDatabase.cleanup();
   });
 
-  it("scopes the room list: admins see every room, managers their own, students none", () => {
-    expect(listAdminRooms(testDatabase.db, admin)).toHaveLength(5);
-    expect(listAdminRooms(testDatabase.db, marcus).map((room) => room.code).sort()).toEqual([
+  it("scopes the room list: admins see every room, managers their own, students none", async () => {
+    expect(await listAdminRooms(testDatabase.db, admin)).toHaveLength(5);
+    expect((await listAdminRooms(testDatabase.db, marcus)).map((room) => room.code).sort()).toEqual([
       "ARC-B1",
       "NEW-14",
       "SEM-02",
     ]);
-    expect(listAdminRooms(testDatabase.db, amelia)).toEqual([]);
-    expect(getAdminRoom(testDatabase.db, priya, "room_seminar_02")).toBeNull();
+    expect(await listAdminRooms(testDatabase.db, amelia)).toEqual([]);
+    expect(await getAdminRoom(testDatabase.db, priya, "room_seminar_02")).toBeNull();
   });
 
-  it("gives a room's manager hours, rules, and closures but not details or status", () => {
-    const access = getAdminRoom(testDatabase.db, marcus, "room_seminar_02");
+  it("gives a room's manager hours, rules, and closures but not details or status", async () => {
+    const access = await getAdminRoom(testDatabase.db, marcus, "room_seminar_02");
 
     expect(access?.permissions).toEqual({
       canEditDetails: false,
@@ -108,15 +108,15 @@ describe("room administration", () => {
       canManageBlackouts: true,
     });
 
-    const result = updateRoomDetails(testDatabase.db, marcus, "room_seminar_02", {
+    const result = await updateRoomDetails(testDatabase.db, marcus, "room_seminar_02", {
       ...seminarDetails,
       capacity: "200",
     });
     expect(result).toMatchObject({ ok: false, kind: "forbidden" });
   });
 
-  it("creates a bookable room with default hours and a policy, and tells its manager", () => {
-    const result = createRoom(testDatabase.db, admin, {
+  it("creates a bookable room with default hours and a policy, and tells its manager", async () => {
+    const result = await createRoom(testDatabase.db, admin, {
       code: "lab-07",
       name: "Maker Lab 07",
       building: "Engineering Block",
@@ -130,7 +130,7 @@ describe("room administration", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const room = getRoomDetail(testDatabase.db, amelia, "LAB-07", null);
+    const room = await getRoomDetail(testDatabase.db, amelia, "LAB-07", null);
     expect(room).toMatchObject({
       code: "LAB-07",
       facilities: ["3D printers", "Workbenches"],
@@ -138,13 +138,13 @@ describe("room administration", () => {
     });
     expect(room?.hours.map((rule) => rule.weekday)).toEqual([1, 2, 3, 4, 5]);
 
-    const notice = testDatabase.db
+    const notice = await testDatabase.db
       .prepare("SELECT kind, title FROM notifications WHERE recipient_id = 'usr_priya_nair'")
       .get() as { kind: string; title: string };
     expect(notice).toEqual({ kind: "room_assignment", title: "You now manage Maker Lab 07" });
   });
 
-  it("rejects duplicate codes, non-manager assignees, and non-admin creators", () => {
+  it("rejects duplicate codes, non-manager assignees, and non-admin creators", async () => {
     const base = {
       code: "SEM-02",
       name: "Duplicate",
@@ -156,27 +156,27 @@ describe("room administration", () => {
       managerId: "usr_marcus_webb",
     };
 
-    expect(createRoom(testDatabase.db, admin, base)).toMatchObject({
+    expect(await createRoom(testDatabase.db, admin, base)).toMatchObject({
       ok: false,
       fieldErrors: { code: expect.stringContaining("already in use") },
     });
     expect(
-      createRoom(testDatabase.db, admin, { ...base, code: "NEW-99", managerId: "usr_amelia_chen" }),
+      await createRoom(testDatabase.db, admin, { ...base, code: "NEW-99", managerId: "usr_amelia_chen" }),
     ).toMatchObject({ ok: false, fieldErrors: { managerId: expect.any(String) } });
-    expect(createRoom(testDatabase.db, marcus, { ...base, code: "NEW-99" })).toMatchObject({
+    expect(await createRoom(testDatabase.db, marcus, { ...base, code: "NEW-99" })).toMatchObject({
       ok: false,
       kind: "forbidden",
     });
   });
 
-  it("reassigns a room so its pending requests move to the new manager's queue", () => {
-    const result = updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
+  it("reassigns a room so its pending requests move to the new manager's queue", async () => {
+    const result = await updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
       ...seminarDetails,
       managerId: "usr_priya_nair",
     });
     expect(result.ok).toBe(true);
 
-    const decision = decideBooking(testDatabase.db, priya, {
+    const decision = await decideBooking(testDatabase.db, priya, {
       bookingId: "booking_pending_seminar",
       action: "approve",
       decisionReason: "New manager approving the workshop.",
@@ -185,7 +185,7 @@ describe("room administration", () => {
     });
     expect(decision).toMatchObject({ ok: true });
 
-    const kinds = testDatabase.db
+    const kinds = await testDatabase.db
       .prepare("SELECT recipient_id, kind FROM notifications WHERE kind = 'room_assignment' ORDER BY recipient_id")
       .all();
     expect(kinds).toEqual([
@@ -194,8 +194,8 @@ describe("room administration", () => {
     ]);
   });
 
-  it("asks before closing a room with upcoming bookings, then cancels and notifies", () => {
-    const preview = updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
+  it("asks before closing a room with upcoming bookings, then cancels and notifies", async () => {
+    const preview = await updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
       ...seminarDetails,
       status: "inactive",
     });
@@ -206,22 +206,22 @@ describe("room administration", () => {
       "booking_approved_seminar",
       "booking_pending_seminar",
     ]);
-    expect(status(testDatabase, "booking_approved_seminar")).toBe("approved");
+    expect(await status(testDatabase, "booking_approved_seminar")).toBe("approved");
 
-    const confirmed = updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
+    const confirmed = await updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
       ...seminarDetails,
       status: "inactive",
       confirmImpact: true,
     });
 
     expect(confirmed).toMatchObject({ ok: true, cancelledCount: 2 });
-    expect(status(testDatabase, "booking_approved_seminar")).toBe("cancelled");
-    expect(status(testDatabase, "booking_pending_seminar")).toBe("cancelled");
-    expect(getRoomDetail(testDatabase.db, amelia, "SEM-02", null)).toBeNull();
+    expect(await status(testDatabase, "booking_approved_seminar")).toBe("cancelled");
+    expect(await status(testDatabase, "booking_pending_seminar")).toBe("cancelled");
+    expect(await getRoomDetail(testDatabase.db, amelia, "SEM-02", null)).toBeNull();
   });
 
-  it("warns about upcoming bookings above a reduced capacity without cancelling them", () => {
-    const result = updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
+  it("warns about upcoming bookings above a reduced capacity without cancelling them", async () => {
+    const result = await updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
       ...seminarDetails,
       capacity: "12",
     });
@@ -230,11 +230,11 @@ describe("room administration", () => {
     if (!result.ok) return;
     // The approved Robotics Club booking expects 14; the pending one expects 10.
     expect(result.overCapacity.map((item) => item.id)).toEqual(["booking_approved_seminar"]);
-    expect(status(testDatabase, "booking_approved_seminar")).toBe("approved");
+    expect(await status(testDatabase, "booking_approved_seminar")).toBe("approved");
   });
 
-  it("replaces opening hours and flags bookings left outside them", () => {
-    const result = updateRoomHours(
+  it("replaces opening hours and flags bookings left outside them", async () => {
+    const result = await updateRoomHours(
       testDatabase.db,
       marcus,
       "room_seminar_02",
@@ -246,25 +246,25 @@ describe("room administration", () => {
     // Approved booking Thu 16:00–17:30 now falls after closing.
     expect(result.outsideHours.map((item) => item.id)).toEqual(["booking_approved_seminar"]);
     expect(
-      getAdminRoom(testDatabase.db, admin, "room_seminar_02")?.room.hours.find(
+      (await getAdminRoom(testDatabase.db, admin, "room_seminar_02"))?.room.hours.find(
         (day) => day.weekday === 1,
       ),
     ).toEqual({ weekday: 1, open: true, opensAt: "08:00", closesAt: "15:00" });
   });
 
-  it("rejects opening hours that close before they open", () => {
+  it("rejects opening hours that close before they open", async () => {
     const hours = weekdays("09:00", "17:00");
     hours[0] = { weekday: 1, open: true, opensAt: "18:00", closesAt: "09:00" };
 
-    expect(updateRoomHours(testDatabase.db, admin, "room_seminar_02", hours)).toMatchObject({
+    expect(await updateRoomHours(testDatabase.db, admin, "room_seminar_02", hours)).toMatchObject({
       ok: false,
       kind: "validation",
       message: "Monday: closing time must be after opening time.",
     });
   });
 
-  it("saves structured booking rules and refuses a gap that would clash with approved bookings", () => {
-    const saved = updateRoomPolicy(testDatabase.db, marcus, "room_seminar_02", {
+  it("saves structured booking rules and refuses a gap that would clash with approved bookings", async () => {
+    const saved = await updateRoomPolicy(testDatabase.db, marcus, "room_seminar_02", {
       ...defaultPolicy,
       allocationRule: "fair_share",
       maxActivePerRequester: 3,
@@ -276,7 +276,7 @@ describe("room administration", () => {
     });
 
     // Two approved Classroom 14 bookings 30 minutes apart.
-    testDatabase.db
+    await testDatabase.db
       .prepare(
         `INSERT INTO bookings (
            id, room_id, requester_id, purpose, expected_attendance, start_at, end_at,
@@ -290,35 +290,35 @@ describe("room administration", () => {
       )
       .run();
 
-    const clash = updateRoomPolicy(testDatabase.db, admin, "room_classroom_14", {
+    const clash = await updateRoomPolicy(testDatabase.db, admin, "room_classroom_14", {
       ...defaultPolicy,
       bufferMinutes: 60,
     });
     expect(clash).toMatchObject({ ok: false, kind: "conflict" });
 
-    const fits = updateRoomPolicy(testDatabase.db, admin, "room_classroom_14", {
+    const fits = await updateRoomPolicy(testDatabase.db, admin, "room_classroom_14", {
       ...defaultPolicy,
       bufferMinutes: 30,
     });
     expect(fits).toMatchObject({ ok: true });
   });
 
-  it("rejects booking rules outside the published options", () => {
+  it("rejects booking rules outside the published options", async () => {
     expect(
-      updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
+      await updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
         ...defaultPolicy,
         slotIntervalMinutes: 7,
       }),
     ).toMatchObject({ ok: false, kind: "validation" });
     expect(
-      updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
+      await updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
         ...defaultPolicy,
         allocationRule: "loudest_voice" as PolicyInput["allocationRule"],
       }),
     ).toMatchObject({ ok: false, kind: "validation" });
   });
 
-  it("previews, adds, and removes a closure, cancelling what it overlaps", () => {
+  it("previews, adds, and removes a closure, cancelling what it overlaps", async () => {
     const input = {
       startDate: "2026-10-29",
       endDate: "2026-10-29",
@@ -326,41 +326,41 @@ describe("room administration", () => {
       reason: "Projector replacement",
     };
 
-    const preview = addBlackout(testDatabase.db, marcus, "room_seminar_02", input);
+    const preview = await addBlackout(testDatabase.db, marcus, "room_seminar_02", input);
     expect(preview).toMatchObject({ ok: false, kind: "needs_confirmation" });
     if (preview.ok || preview.kind !== "needs_confirmation") return;
     expect(preview.impact.map((item) => item.id)).toEqual(["booking_approved_seminar"]);
 
-    const added = addBlackout(testDatabase.db, marcus, "room_seminar_02", {
+    const added = await addBlackout(testDatabase.db, marcus, "room_seminar_02", {
       ...input,
       confirmImpact: true,
     });
     expect(added).toMatchObject({ ok: true, cancelledCount: 1 });
     if (!added.ok) return;
 
-    expect(status(testDatabase, "booking_approved_seminar")).toBe("cancelled");
-    const notice = testDatabase.db
+    expect(await status(testDatabase, "booking_approved_seminar")).toBe("cancelled");
+    const notice = await testDatabase.db
       .prepare(
         "SELECT body FROM notifications WHERE recipient_id = 'usr_amelia_chen' AND kind = 'booking_cancelled_by_staff'",
       )
       .get() as { body: string };
     expect(notice.body).toContain("Room closed: Projector replacement");
 
-    const room = getRoomDetail(testDatabase.db, amelia, "SEM-02", null);
+    const room = await getRoomDetail(testDatabase.db, amelia, "SEM-02", null);
     expect(room?.upcomingBlackouts).toHaveLength(1);
 
-    const removed = removeBlackout(testDatabase.db, marcus, "room_seminar_02", added.blackoutId);
+    const removed = await removeBlackout(testDatabase.db, marcus, "room_seminar_02", added.blackoutId);
     expect(removed).toMatchObject({ ok: true });
-    expect(getRoomDetail(testDatabase.db, amelia, "SEM-02", null)?.upcomingBlackouts).toHaveLength(0);
+    expect((await getRoomDetail(testDatabase.db, amelia, "SEM-02", null))?.upcomingBlackouts).toHaveLength(0);
 
-    expect(() =>
+    await expect(
       testDatabase.db.prepare("DELETE FROM room_blackouts WHERE id = ?").run(added.blackoutId),
-    ).toThrow(/removed, not deleted/);
+    ).rejects.toThrow(/removed, not deleted/);
   });
 
-  it("refuses closures in the past and closures that end before they start", () => {
+  it("refuses closures in the past and closures that end before they start", async () => {
     expect(
-      addBlackout(testDatabase.db, admin, "room_seminar_02", {
+      await addBlackout(testDatabase.db, admin, "room_seminar_02", {
         startDate: "2026-10-27",
         endDate: "2026-10-27",
         allDay: true,
@@ -369,7 +369,7 @@ describe("room administration", () => {
     ).toMatchObject({ ok: false, kind: "validation" });
 
     expect(
-      addBlackout(testDatabase.db, admin, "room_seminar_02", {
+      await addBlackout(testDatabase.db, admin, "room_seminar_02", {
         startDate: "2026-10-30",
         endDate: "2026-10-30",
         allDay: false,
@@ -380,7 +380,7 @@ describe("room administration", () => {
     ).toMatchObject({ ok: false, kind: "validation" });
   });
 
-  it("labels closures in plain words", () => {
+  it("labels closures in plain words", async () => {
     expect(blackoutLabel("2026-11-02T00:00:00.000Z", "2026-11-03T00:00:00.000Z")).toBe(
       "Mon, 2 Nov 2026 · all day",
     );
@@ -393,20 +393,20 @@ describe("room administration", () => {
   });
 
   it("keeps administrator edits when setup reseeds the database", async () => {
-    updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
+    await updateRoomDetails(testDatabase.db, admin, "room_seminar_02", {
       ...seminarDetails,
       name: "Seminar Room 02 (Renovated)",
       managerId: "usr_priya_nair",
     });
-    updateRoomHours(testDatabase.db, admin, "room_seminar_02", weekdays("07:00", "23:00"));
-    updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
+    await updateRoomHours(testDatabase.db, admin, "room_seminar_02", weekdays("07:00", "23:00"));
+    await updateRoomPolicy(testDatabase.db, admin, "room_seminar_02", {
       ...defaultPolicy,
       allocationRule: "best_fit",
     });
 
     await seedDatabase(testDatabase.db, { now: fixedNow });
 
-    const access = getAdminRoom(testDatabase.db, admin, "room_seminar_02");
+    const access = await getAdminRoom(testDatabase.db, admin, "room_seminar_02");
     expect(access?.room).toMatchObject({
       name: "Seminar Room 02 (Renovated)",
       managerId: "usr_priya_nair",
@@ -414,11 +414,9 @@ describe("room administration", () => {
     });
     expect(access?.room.hours.find((day) => day.weekday === 1)?.opensAt).toBe("07:00");
     expect(
-      (
-        testDatabase.db
-          .prepare("SELECT count(*) AS count FROM availability_rules WHERE room_id = 'room_seminar_02'")
-          .get() as { count: number }
-      ).count,
+      ((await testDatabase.db
+        .prepare("SELECT count(*) AS count FROM availability_rules WHERE room_id = 'room_seminar_02'")
+        .get()) as { count: number }).count,
     ).toBe(5);
   });
 });

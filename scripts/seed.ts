@@ -1,20 +1,19 @@
 import "./load-env";
-import { getDatabasePath } from "@/lib/config";
+import { getDatabaseUrl } from "@/lib/config";
 import { openDatabase } from "@/lib/db/client";
 import { runMigrations } from "@/lib/db/migrate";
 import { seedDatabase } from "@/lib/db/seed";
 
 async function main() {
-  const databasePath = getDatabasePath();
-  const db = openDatabase(databasePath);
+  const db = openDatabase(getDatabaseUrl());
 
   try {
-    runMigrations(db);
+    await runMigrations(db);
     const summary = await seedDatabase(db);
-    console.log(`Database: ${databasePath}`);
+    console.log("Database: Postgres");
     console.table(summary);
   } finally {
-    db.close();
+    await db.close();
   }
 }
 

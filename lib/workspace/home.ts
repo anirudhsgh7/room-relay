@@ -52,12 +52,12 @@ export interface StaffHome {
 
 const DAY = 24 * 60 * 60 * 1000;
 
-export function getStudentHome(
+export async function getStudentHome(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): StudentHome {
+): Promise<StudentHome> {
   const nowMs = Date.now();
-  const all = listMyBookings(db, profile, 100);
+  const all = await listMyBookings(db, profile, 100);
   const actions: HomeAction[] = [];
 
   for (const booking of all) {
@@ -105,15 +105,20 @@ export function getStudentHome(
   return {
     actions,
     upcomingTotal: upcoming.length,
-    upcoming: upcoming.slice(0, 5).map((booking) => toHomeBooking(db, booking)),
+    upcoming: await Promise.all(
+      upcoming.slice(0, 5).map((booking) => toHomeBooking(db, booking)),
+    ),
   };
 }
 
-function toHomeBooking(db: RoomRelayDatabase, booking: MyBooking): HomeBooking {
+async function toHomeBooking(
+  db: RoomRelayDatabase,
+  booking: MyBooking,
+): Promise<HomeBooking> {
   let note: string | null = null;
 
   if (booking.status === "waitlisted") {
-    const standing = getWaitlistStanding(db, booking.id);
+    const standing = await getWaitlistStanding(db, booking.id);
     note = standing ? `Number ${standing.position} on the waitlist` : "On the waitlist";
   } else if (booking.status === "pending") {
     note = "Waiting for the room manager";
@@ -129,18 +134,18 @@ function toHomeBooking(db: RoomRelayDatabase, booking: MyBooking): HomeBooking {
   };
 }
 
-export function getStaffHome(
+export async function getStaffHome(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): StaffHome {
+): Promise<StaffHome> {
   const scope = profile.role === "admin" ? "1 = 1" : "r.manager_id = ?";
   const parameters = profile.role === "admin" ? [] : [profile.id];
   const nowIso = new Date().toISOString();
   const nowMs = Date.parse(nowIso);
-  const count = (sql: string, ...extra: unknown[]) =>
-    (db.prepare(sql).get(...parameters, ...extra) as { count: number }).count;
+  const count = async (sql: string, ...extra: unknown[]) =>
+    ((await db.prepare(sql).get([...parameters, ...extra])) as { count: number }).count;
 
-  const pendingRows = db
+  const pendingRows = (await db
     .prepare(
       `SELECT b.id, b.room_id, b.start_at, b.end_at, b.status,
          r.name AS room_name, p.display_name AS requester_name, policy.buffer_minutes
@@ -150,11 +155,11 @@ export function getStaffHome(
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
        WHERE ${scope}
          AND b.status = 'pending'
-         AND julianday(b.start_at) > julianday(?)
+         AND b.start_at > ?
        ORDER BY b.start_at
        LIMIT 5`,
     )
-    .all(...parameters, nowIso) as Array<{
+    .all([...parameters, nowIso])) as Array<{
     id: string;
     room_id: string;
     start_at: string;
@@ -171,12 +176,12 @@ export function getStaffHome(
      WHERE other.room_id = @room_id
        AND other.id <> @id
        AND other.status = 'pending'
-       AND julianday(other.start_at) < julianday(@end_at) + (@buffer / 1440.0)
-       AND julianday(other.end_at) + (@buffer / 1440.0) > julianday(@start_at)`,
+       AND other.start_at < @end_at::timestamptz + (@buffer * interval '1 minute')
+       AND other.end_at + (@buffer * interval '1 minute') > @start_at::timestamptz`,
   );
 
   const { startUtc, endUtc } = campusLocalDayRange(campusToday());
-  const todayRows = db
+  const todayRows = (await db
     .prepare(
       `SELECT b.id, b.start_at, b.end_at, b.status,
          r.name AS room_name, p.display_name AS requester_name
@@ -185,12 +190,12 @@ export function getStaffHome(
        JOIN profiles p ON p.id = b.requester_id
        WHERE ${scope}
          AND b.status IN ('approved', 'checked_in', 'completed', 'incident')
-         AND julianday(b.start_at) < julianday(?)
-         AND julianday(b.end_at) > julianday(?)
+         AND b.start_at < ?
+         AND b.end_at > ?
        ORDER BY b.start_at
        LIMIT 12`,
     )
-    .all(...parameters, endUtc, startUtc) as Array<{
+    .all([...parameters, endUtc, startUtc])) as Array<{
     id: string;
     start_at: string;
     end_at: string;
@@ -199,37 +204,37 @@ export function getStaffHome(
     requester_name: string;
   }>;
 
-  const toReview = count(
+  const toReview = await count(
     `SELECT count(*) AS count FROM bookings b JOIN rooms r ON r.id = b.room_id
-     WHERE ${scope} AND b.status = 'pending' AND julianday(b.start_at) > julianday(?)`,
+     WHERE ${scope} AND b.status = 'pending' AND b.start_at > ?`,
     nowIso,
   );
-  const waitlisted = count(
+  const waitlisted = await count(
     `SELECT count(*) AS count FROM bookings b JOIN rooms r ON r.id = b.room_id
-     WHERE ${scope} AND b.status = 'waitlisted' AND julianday(b.start_at) > julianday(?)`,
+     WHERE ${scope} AND b.status = 'waitlisted' AND b.start_at > ?`,
     nowIso,
   );
-  const inUse = count(
+  const inUse = await count(
     `SELECT count(*) AS count FROM bookings b JOIN rooms r ON r.id = b.room_id
-     WHERE ${scope} AND b.status = 'checked_in' AND julianday(b.end_at) >= julianday(?)`,
+     WHERE ${scope} AND b.status = 'checked_in' AND b.end_at >= ?`,
     nowIso,
   );
-  const overdueRows = db
+  const overdueRows = (await db
     .prepare(
       `SELECT b.id, b.end_at, r.name AS room_name, p.display_name AS requester_name
        FROM bookings b
        JOIN rooms r ON r.id = b.room_id
        JOIN profiles p ON p.id = b.requester_id
-       WHERE ${scope} AND b.status = 'checked_in' AND julianday(b.end_at) < julianday(?)
+       WHERE ${scope} AND b.status = 'checked_in' AND b.end_at < ?
        ORDER BY b.end_at`,
     )
-    .all(...parameters, nowIso) as Array<{
+    .all([...parameters, nowIso])) as Array<{
     id: string;
     end_at: string;
     room_name: string;
     requester_name: string;
   }>;
-  const openIssues = count(
+  const openIssues = await count(
     `SELECT count(*) AS count FROM incidents i
      JOIN bookings b ON b.id = i.booking_id JOIN rooms r ON r.id = b.room_id
      WHERE ${scope} AND i.status IN ('open', 'reviewing')`,
@@ -262,8 +267,7 @@ export function getStaffHome(
 
   const roomsNeedingSetup =
     profile.role === "admin" || profile.role === "manager"
-      ? (
-          db
+      ? ((await db
             .prepare(
               `SELECT r.id, r.name,
                  (SELECT count(*) FROM availability_rules a WHERE a.room_id = r.id AND a.active = 1) AS rule_count,
@@ -273,13 +277,12 @@ export function getStaffHome(
                WHERE ${scope} AND r.status = 'active'
                ORDER BY r.name`,
             )
-            .all(...parameters) as Array<{
+            .all(parameters)) as Array<{
             id: string;
             name: string;
             rule_count: number;
             requests_enabled: number | null;
-          }>
-        )
+          }>)
           .filter((room) => room.rule_count === 0 || room.requests_enabled !== 1)
           .map((room) => ({
             id: room.id,
@@ -304,24 +307,26 @@ export function getStaffHome(
         tone: openIssues > 0 ? "attention" : "neutral",
       },
     ],
-    decideSoon: pendingRows.map((row) => ({
-      id: row.id,
-      roomName: row.room_name,
-      requesterName: row.requester_name,
-      when: formatCampusDateTime(row.start_at, row.end_at),
-      status: row.status,
-      note: null,
-      href: `/app/manager/requests/${row.id}`,
-      competing: (
-        competing.get({
-          room_id: row.room_id,
-          id: row.id,
-          start_at: row.start_at,
-          end_at: row.end_at,
-          buffer: row.buffer_minutes ?? 0,
-        }) as { count: number }
-      ).count,
-    })),
+    decideSoon: await Promise.all(
+      pendingRows.map(async (row) => ({
+        id: row.id,
+        roomName: row.room_name,
+        requesterName: row.requester_name,
+        when: formatCampusDateTime(row.start_at, row.end_at),
+        status: row.status,
+        note: null,
+        href: `/app/manager/requests/${row.id}`,
+        competing: (
+          (await competing.get({
+            room_id: row.room_id,
+            id: row.id,
+            start_at: row.start_at,
+            end_at: row.end_at,
+            buffer: row.buffer_minutes ?? 0,
+          })) as { count: number }
+        ).count,
+      })),
+    ),
     today: todayRows.map((row) => ({
       id: row.id,
       roomName: row.room_name,

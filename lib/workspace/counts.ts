@@ -9,11 +9,11 @@ export interface WorkspaceCounts {
 }
 
 /** Badge counts for the navigation, scoped exactly like the pages they open. */
-export function getWorkspaceCounts(
+export async function getWorkspaceCounts(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): WorkspaceCounts {
-  const unread = countUnreadNotifications(db, profile.id);
+): Promise<WorkspaceCounts> {
+  const unread = await countUnreadNotifications(db, profile.id);
 
   if (profile.role === "student" || profile.status !== "active") {
     return { unread, toReview: 0, openIssues: 0 };
@@ -24,20 +24,20 @@ export function getWorkspaceCounts(
   const nowIso = new Date().toISOString();
 
   const toReview = (
-    db
+    (await db
       .prepare(
         `SELECT count(*) AS count
          FROM bookings b
          JOIN rooms r ON r.id = b.room_id
          WHERE ${scope}
            AND b.status = 'pending'
-           AND julianday(b.start_at) > julianday(?)`,
+           AND b.start_at > ?`,
       )
-      .get(...parameters, nowIso) as { count: number }
+      .get([...parameters, nowIso])) as { count: number }
   ).count;
 
   const openIssues = (
-    db
+    (await db
       .prepare(
         `SELECT count(*) AS count
          FROM incidents i
@@ -46,7 +46,7 @@ export function getWorkspaceCounts(
          WHERE ${scope}
            AND i.status IN ('open', 'reviewing')`,
       )
-      .get(...parameters) as { count: number }
+      .get(parameters)) as { count: number }
   ).count;
 
   return { unread, toReview, openIssues };

@@ -2,42 +2,48 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { RoomRelayDatabase } from "@/lib/db/client";
 
-const DEFAULT_MIGRATIONS_DIRECTORY = path.join(process.cwd(), "db", "migrations");
+const DEFAULT_MIGRATIONS_DIRECTORY = path.join(
+  process.cwd(),
+  "db",
+  "postgres",
+);
 
 export interface AppliedMigration {
   name: string;
   applied_at: string;
 }
 
-export function ensureMigrationsTable(db: RoomRelayDatabase): void {
-  db.exec(`
+export async function ensureMigrationsTable(
+  db: RoomRelayDatabase,
+): Promise<void> {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
-      name       TEXT PRIMARY KEY,
-      applied_at TEXT NOT NULL
+      name       text PRIMARY KEY,
+      applied_at timestamptz NOT NULL
     );
   `);
 }
 
-export function getAppliedMigrations(
+export async function getAppliedMigrations(
   db: RoomRelayDatabase,
-): AppliedMigration[] {
-  ensureMigrationsTable(db);
+): Promise<AppliedMigration[]> {
+  await ensureMigrationsTable(db);
 
   return db
-    .prepare("SELECT name, applied_at FROM schema_migrations ORDER BY name")
-    .all() as AppliedMigration[];
+    .prepare("SELECT name, applied_at::text AS applied_at FROM schema_migrations ORDER BY name")
+    .all<AppliedMigration>();
 }
 
 /**
  * Applies every unapplied SQL file in lexicographic order. Each migration and
- * its bookkeeping row commit together, so a failed migration cannot be marked
- * as applied.
+ * its bookkeeping row commit together. A transaction-scoped advisory lock
+ * prevents two deploys from racing the same schema change.
  */
-export function runMigrations(
+export async function runMigrations(
   db: RoomRelayDatabase,
   migrationsDirectory = DEFAULT_MIGRATIONS_DIRECTORY,
-): string[] {
-  ensureMigrationsTable(db);
+): Promise<string[]> {
+  await ensureMigrationsTable(db);
 
   const files = readdirSync(migrationsDirectory)
     .filter((file) => file.endsWith(".sql"))
@@ -48,10 +54,7 @@ export function runMigrations(
   }
 
   const appliedNames = new Set(
-    getAppliedMigrations(db).map((migration) => migration.name),
-  );
-  const insertMigration = db.prepare(
-    "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+    (await getAppliedMigrations(db)).map((migration) => migration.name),
   );
   const appliedNow: string[] = [];
 
@@ -61,12 +64,17 @@ export function runMigrations(
     }
 
     const sql = readFileSync(path.join(migrationsDirectory, file), "utf8");
-    const apply = db.transaction(() => {
-      db.exec(sql);
-      insertMigration.run(file, new Date().toISOString());
+    const apply = db.transaction(async () => {
+      await db.exec("SELECT pg_advisory_xact_lock(hashtext('roomrelay_migrations'))");
+      await db.exec(sql);
+      await db
+        .prepare(
+          "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
+        )
+        .run([file, new Date().toISOString()]);
     });
 
-    apply();
+    await apply.immediate();
     appliedNow.push(file);
   }
 

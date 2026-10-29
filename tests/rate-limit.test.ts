@@ -5,7 +5,7 @@ import {
 } from "@/lib/rate-limit";
 
 describe("in-process rate limiting", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-28T12:00:00.000Z"));
     clearRateLimitsForTests();
@@ -16,7 +16,7 @@ describe("in-process rate limiting", () => {
     vi.useRealTimers();
   });
 
-  it("allows requests up to the configured limit", () => {
+  it("allows requests up to the configured limit", async () => {
     expect(
       consumeRateLimit("key-a", { limit: 2, windowMs: 60_000 }).allowed,
     ).toBe(true);
@@ -28,7 +28,7 @@ describe("in-process rate limiting", () => {
     ).toBe(false);
   });
 
-  it("scopes counters by key", () => {
+  it("scopes counters by key", async () => {
     consumeRateLimit("key-a", { limit: 1, windowMs: 60_000 });
     expect(
       consumeRateLimit("key-a", { limit: 1, windowMs: 60_000 }).allowed,
@@ -38,7 +38,7 @@ describe("in-process rate limiting", () => {
     ).toBe(true);
   });
 
-  it("resets after the window expires", () => {
+  it("resets after the window expires", async () => {
     consumeRateLimit("key-a", { limit: 1, windowMs: 1_000 });
     vi.advanceTimersByTime(1_001);
 

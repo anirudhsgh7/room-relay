@@ -336,21 +336,21 @@ function parseSnapshotWarnings(value: string | null): ManagerEligibilityWarning[
   }
 }
 
-function pendingOverlapCount(
+async function pendingOverlapCount(
   db: RoomRelayDatabase,
   booking: { id: string; room_id: string; start_at: string; end_at: string },
-): number {
-  const row = db
+): Promise<number> {
+  const row = (await db
     .prepare(
       `SELECT count(*) AS count
        FROM bookings other
        WHERE other.room_id = ?
          AND other.id <> ?
          AND other.status = 'pending'
-         AND julianday(other.start_at) < julianday(?)
-         AND julianday(other.end_at) > julianday(?)`,
+         AND other.start_at < ?
+         AND other.end_at > ?`,
     )
-    .get(booking.room_id, booking.id, booking.end_at, booking.start_at) as {
+    .get([booking.room_id, booking.id, booking.end_at, booking.start_at])) as {
     count: number;
   };
 
@@ -361,27 +361,27 @@ function roomPolicy(row: ManagerRoomRow): RoomPolicy {
   return policyFromColumns(row);
 }
 
-function hydrateQueueItem(
+async function hydrateQueueItem(
   db: RoomRelayDatabase,
   row: ManagerBookingRow,
   policies: Map<string, RoomPolicy>,
-): ManagerQueueItem {
+): Promise<ManagerQueueItem> {
   const policy = policies.get(row.room_id);
-  const outstanding = getOutstandingMandatoryRequirements(
+  const outstanding = await getOutstandingMandatoryRequirements(
     db,
     row.room_id,
     row.requester_id,
   );
-  const blockers = getBlockingBookings(
+  const blockers = (await getBlockingBookings(
     db,
     row.room_id,
     row.start_at,
     row.end_at,
     policy?.bufferMinutes ?? 0,
-  ).filter((blocker) => blocker.id !== row.id);
+  )).filter((blocker) => blocker.id !== row.id);
   const overlapCount =
     row.status === "pending"
-      ? pendingOverlapCount(db, {
+      ? await pendingOverlapCount(db, {
           id: row.id,
           room_id: row.room_id,
           start_at: row.start_at,
@@ -422,46 +422,46 @@ function hydrateQueueItem(
   };
 }
 
-function loadPolicies(
+async function loadPolicies(
   db: RoomRelayDatabase,
   roomIds: string[],
-): Map<string, RoomPolicy> {
+): Promise<Map<string, RoomPolicy>> {
   if (roomIds.length === 0) {
     return new Map();
   }
 
   const placeholders = roomIds.map(() => "?").join(", ");
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT policy.room_id, ${POLICY_SELECT_COLUMNS}
        FROM room_booking_policies policy
        WHERE policy.room_id IN (${placeholders})`,
     )
-    .all(...roomIds) as Array<PolicyColumns & { room_id: string }>;
+    .all(roomIds)) as Array<PolicyColumns & { room_id: string }>;
 
   return new Map(rows.map((row) => [row.room_id, policyFromColumns(row)]));
 }
 
-function scopedRooms(
+async function scopedRooms(
   db: RoomRelayDatabase,
   actor: UserProfile,
-): ManagerQueueRoomOption[] {
+): Promise<ManagerQueueRoomOption[]> {
   const scope = scopeFor(actor);
-  return db
+  return (await db
     .prepare(
       `SELECT DISTINCT r.code, r.name
        FROM rooms r
        WHERE ${scope.sql}
        ORDER BY r.name`,
     )
-    .all(...scope.parameters) as ManagerQueueRoomOption[];
+    .all(scope.parameters)) as ManagerQueueRoomOption[];
 }
 
-export function listManagerQueue(
+export async function listManagerQueue(
   db: RoomRelayDatabase,
   actor: UserProfile,
   filters: ManagerQueueFilters,
-): ManagerQueueResult {
+): Promise<ManagerQueueResult> {
   const emptyCounts: ManagerQueueCounts = {
     pending: 0,
     waitlisted: 0,
@@ -489,7 +489,7 @@ export function listManagerQueue(
   const commonParameters = [...scope.parameters];
 
   if (filters.roomCode) {
-    commonConditions.push("r.code = ? COLLATE NOCASE");
+    commonConditions.push("lower(r.code) = lower(?)");
     commonParameters.push(filters.roomCode);
   }
   if (dateRange) {
@@ -497,7 +497,7 @@ export function listManagerQueue(
     commonParameters.push(dateRange.startUtc, dateRange.endUtc);
   }
 
-  const countRows = db
+  const countRows = (await db
     .prepare(
       `SELECT b.status, count(*) AS count
        FROM bookings b
@@ -505,7 +505,7 @@ export function listManagerQueue(
        WHERE ${commonConditions.join(" AND ")}
        GROUP BY b.status`,
     )
-    .all(...commonParameters) as Array<{ status: BookingStatus; count: number }>;
+    .all(commonParameters)) as Array<{ status: BookingStatus; count: number }>;
 
   const counts = { ...emptyCounts };
   for (const row of countRows) {
@@ -514,7 +514,7 @@ export function listManagerQueue(
     }
   }
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `${MANAGER_SELECT}
        WHERE ${commonConditions.join(" AND ")}
@@ -522,13 +522,15 @@ export function listManagerQueue(
        ORDER BY b.created_at ASC, b.start_at ASC, b.id ASC
        LIMIT ${MAX_SCOPED_ROWS}`,
     )
-    .all(...commonParameters, filters.status) as ManagerBookingRow[];
+    .all([...commonParameters, filters.status])) as ManagerBookingRow[];
 
-  const policies = loadPolicies(
+  const policies = await loadPolicies(
     db,
     [...new Set(rows.map((row) => row.room_id))],
   );
-  let items = rows.map((row) => hydrateQueueItem(db, row, policies));
+  let items = await Promise.all(
+    rows.map((row) => hydrateQueueItem(db, row, policies)),
+  );
 
   if (filters.status === "pending" || filters.status === "waitlisted") {
     items.sort(
@@ -561,36 +563,36 @@ export function listManagerQueue(
   return {
     items: items.slice(start, start + PAGE_SIZE),
     counts,
-    rooms: scopedRooms(db, actor),
+    rooms: await scopedRooms(db, actor),
     total,
     page,
     pageSize: PAGE_SIZE,
   };
 }
 
-export function getManagerRequest(
+export async function getManagerRequest(
   db: RoomRelayDatabase,
   actor: UserProfile,
   bookingId: string,
-): ManagerRequestDetail | null {
+): Promise<ManagerRequestDetail | null> {
   if (!canUseManagerQueue(actor)) {
     return null;
   }
 
   const scope = scopeFor(actor);
-  const row = db
+  const row = (await db
     .prepare(
       `${MANAGER_SELECT}
        WHERE b.id = ?
          AND ${scope.sql}`,
     )
-    .get(bookingId, ...scope.parameters) as ManagerBookingRow | undefined;
+    .get([bookingId, ...scope.parameters])) as ManagerBookingRow | undefined;
 
   if (!row) {
     return null;
   }
 
-  const roomRow = db
+  const roomRow = (await db
     .prepare(
       `SELECT
          r.id, r.status, r.capacity, r.facilities, r.policy_summary,
@@ -599,18 +601,16 @@ export function getManagerRequest(
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
        WHERE r.id = ?`,
     )
-    .get(row.room_id) as ManagerRoomRow | undefined;
+    .get(row.room_id)) as ManagerRoomRow | undefined;
 
-  const hours = (
-    db
-      .prepare(
-        `SELECT weekday, opens_at, closes_at, effective_from, effective_until
-         FROM availability_rules
-         WHERE room_id = ? AND active = 1
-         ORDER BY weekday, opens_at`,
-      )
-      .all(row.room_id) as ManagerHoursRow[]
-  ).map<RoomHours>((hour) => ({
+  const hours = ((await db
+    .prepare(
+      `SELECT weekday, opens_at, closes_at, effective_from, effective_until
+       FROM availability_rules
+       WHERE room_id = ? AND active = 1
+       ORDER BY weekday, opens_at`,
+    )
+    .all(row.room_id)) as ManagerHoursRow[]).map<RoomHours>((hour) => ({
     weekday: hour.weekday,
     opensAt: hour.opens_at,
     closesAt: hour.closes_at,
@@ -619,7 +619,7 @@ export function getManagerRequest(
   }));
 
   const policy = roomRow ? roomPolicy(roomRow) : null;
-  const currentRequirements = getCurrentRequirementsForProfile(
+  const currentRequirements = await getCurrentRequirementsForProfile(
     db,
     row.room_id,
     row.requester_id,
@@ -628,7 +628,7 @@ export function getManagerRequest(
     (requirement) =>
       requirement.required && requirement.verification !== "verified",
   );
-  const overlaps = db
+  const overlaps = (await db
     .prepare(
       `SELECT
          other.id, other.purpose, other.group_name, other.start_at,
@@ -639,11 +639,11 @@ export function getManagerRequest(
        WHERE other.room_id = ?
          AND other.id <> ?
          AND other.status = 'pending'
-         AND julianday(other.start_at) < julianday(?)
-         AND julianday(other.end_at) > julianday(?)
+         AND other.start_at < ?
+         AND other.end_at > ?
        ORDER BY other.created_at ASC, other.id ASC`,
     )
-    .all(row.room_id, row.id, row.end_at, row.start_at) as Array<{
+    .all([row.room_id, row.id, row.end_at, row.start_at])) as Array<{
     id: string;
     purpose: string;
     group_name: string | null;
@@ -653,7 +653,7 @@ export function getManagerRequest(
     requester_name: string;
   }>;
 
-  const history = db
+  const history = (await db
     .prepare(
       `SELECT
          event.id, event.action, event.occurred_at, event.summary,
@@ -664,7 +664,7 @@ export function getManagerRequest(
          AND event.entity_id = ?
        ORDER BY event.occurred_at ASC, event.id ASC`,
     )
-    .all(row.id) as Array<{
+    .all(row.id)) as Array<{
     id: string;
     action: string;
     occurred_at: string;
@@ -672,8 +672,8 @@ export function getManagerRequest(
     actor_name: string | null;
   }>;
 
-  const policies = loadPolicies(db, [row.room_id]);
-  const item = hydrateQueueItem(db, row, policies);
+  const policies = await loadPolicies(db, [row.room_id]);
+  const item = await hydrateQueueItem(db, row, policies);
 
   return {
     ...item,

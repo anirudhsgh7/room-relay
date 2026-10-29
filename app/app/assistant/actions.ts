@@ -41,7 +41,7 @@ export async function askAssistantAction(message: string): Promise<AssistantRepl
   }
 
   try {
-    return answerAssistant(getDatabase(), profile, message.slice(0, MAX_ASSISTANT_MESSAGE));
+    return await answerAssistant(getDatabase(), profile, message.slice(0, MAX_ASSISTANT_MESSAGE));
   } catch (error) {
     console.error(
       "Assistant failed:",

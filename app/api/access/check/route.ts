@@ -76,7 +76,7 @@ export async function POST(request: Request) {
   }
 
   const record = body as Record<string, unknown>;
-  const result = simulateAccessCheck(getDatabase(), profile, {
+  const result = await simulateAccessCheck(getDatabase(), profile, {
     credentialId:
       typeof record.credentialId === "string" ? record.credentialId : "",
     roomId: typeof record.roomId === "string" ? record.roomId : "",

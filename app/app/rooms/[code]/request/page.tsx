@@ -32,7 +32,7 @@ export default async function RoomRequestPage({
   const { code } = await params;
   const rawParams = await searchParams;
   const parsed = parseRoomSearchParams(rawParams);
-  const room = getRoomDetail(getDatabase(), profile, code, null);
+  const room = await getRoomDetail(getDatabase(), profile, code, null);
 
   if (!room || !canRequestRoom(profile, room)) {
     notFound();

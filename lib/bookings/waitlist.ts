@@ -44,7 +44,7 @@ interface Actor {
  * later, they move to the waitlist (or are declined when the room has no
  * waitlist) in the same transaction, and each requester is told why.
  */
-export function settleConflictsAfterApproval(
+export async function settleConflictsAfterApproval(
   db: RoomRelayDatabase,
   input: {
     booking: ApprovedBooking;
@@ -53,9 +53,9 @@ export function settleConflictsAfterApproval(
     nowIso: string;
     correlationId: string;
   },
-): { waitlistedIds: string[]; declinedIds: string[] } {
+): Promise<{ waitlistedIds: string[]; declinedIds: string[] }> {
   const now = new Date(input.nowIso);
-  const conflicts = loadConflictingCandidates(
+  const conflicts = await loadConflictingCandidates(
     db,
     {
       roomId: input.booking.roomId,
@@ -75,7 +75,7 @@ export function settleConflictsAfterApproval(
     const slot = formatCampusDateTime(request.startAt, request.endAt);
 
     if (input.policy.waitlistEnabled) {
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE bookings
            SET status = 'waitlisted', waitlisted_at = @now, updated_at = @now
@@ -88,7 +88,7 @@ export function settleConflictsAfterApproval(
       }
 
       waitlistedIds.push(request.id);
-      recordAudit(db, {
+      await recordAudit(db, {
         actorId: input.actor.id,
         action: "booking.waitlisted",
         entityType: "booking",
@@ -104,7 +104,7 @@ export function settleConflictsAfterApproval(
       continue;
     }
 
-    const update = db
+    const update = await db
       .prepare(
         `UPDATE bookings
          SET status = 'rejected',
@@ -128,7 +128,7 @@ export function settleConflictsAfterApproval(
     }
 
     declinedIds.push(request.id);
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: input.actor.id,
       action: "booking.rejected",
       entityType: "booking",
@@ -142,7 +142,7 @@ export function settleConflictsAfterApproval(
         automatic: true,
       },
     });
-    createNotification(db, {
+    await createNotification(db, {
       recipientId: request.requesterId,
       kind: "decision_rejected",
       title: `${input.booking.roomName} was allocated to another request`,
@@ -162,11 +162,11 @@ export function settleConflictsAfterApproval(
       continue;
     }
 
-    const standing = getWaitlistStanding(db, bookingId, now);
+    const standing = await getWaitlistStanding(db, bookingId, now);
     const slot = formatCampusDateTime(request.startAt, request.endAt);
     const place = standing ? `You are number ${standing.position} on the waitlist.` : "";
 
-    createNotification(db, {
+    await createNotification(db, {
       recipientId: request.requesterId,
       kind: "waitlisted",
       title: `You're on the waitlist for ${input.booking.roomName}`,
@@ -193,7 +193,7 @@ interface RoomRow {
  * confirmed booking blocks it. Several may return at once; the published rule
  * then orders them in the review queue.
  */
-export function promoteWaitlist(
+export async function promoteWaitlist(
   db: RoomRelayDatabase,
   input: {
     roomId: string;
@@ -203,11 +203,11 @@ export function promoteWaitlist(
     correlationId: string;
     cause: string;
   },
-): string[] {
-  const room = db
+): Promise<string[]> {
+  const room = (await db
     .prepare("SELECT id, name, status FROM rooms WHERE id = ?")
-    .get(input.roomId) as RoomRow | undefined;
-  const policy = loadRoomPolicy(db, input.roomId);
+    .get(input.roomId)) as RoomRow | undefined;
+  const policy = await loadRoomPolicy(db, input.roomId);
 
   if (!room || room.status !== "active" || !policy || !policy.requestsEnabled) {
     return [];
@@ -216,7 +216,7 @@ export function promoteWaitlist(
   const now = new Date(input.nowIso);
   const waitlisted = rankCandidates(
     policy.allocationRule,
-    loadConflictingCandidates(
+    await loadConflictingCandidates(
       db,
       {
         roomId: room.id,
@@ -229,7 +229,7 @@ export function promoteWaitlist(
       now,
     ),
   );
-  const managerId = activeRoomManagerId(db, room.id);
+  const managerId = await activeRoomManagerId(db, room.id);
   const promoted: string[] = [];
 
   for (const request of waitlisted) {
@@ -241,38 +241,38 @@ export function promoteWaitlist(
 
     if (
       !local.sameLocalDate ||
-      !checkRoomSchedule(
+      !(await checkRoomSchedule(
         db,
         room.id,
         local.date,
         local.weekday,
         local.startMinutes,
         local.endMinutes,
-      )
+      ))
     ) {
       continue;
     }
 
     if (
-      findOverlappingBlackouts(db, room.id, request.startAt, request.endAt)
+      (await findOverlappingBlackouts(db, room.id, request.startAt, request.endAt))
         .length > 0
     ) {
       continue;
     }
 
     if (
-      getBlockingBookings(
+      (await getBlockingBookings(
         db,
         room.id,
         request.startAt,
         request.endAt,
         policy.bufferMinutes,
-      ).length > 0
+      )).length > 0
     ) {
       continue;
     }
 
-    const update = db
+    const update = await db
       .prepare(
         `UPDATE bookings
          SET status = 'pending', promoted_at = @now, updated_at = @now
@@ -287,7 +287,7 @@ export function promoteWaitlist(
     promoted.push(request.id);
     const slot = formatCampusDateTime(request.startAt, request.endAt);
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: null,
       action: "booking.promoted",
       entityType: "booking",
@@ -297,7 +297,7 @@ export function promoteWaitlist(
       correlationId: `booking-promotion:${input.correlationId}`,
       metadata: { cause: input.cause },
     });
-    createNotification(db, {
+    await createNotification(db, {
       recipientId: request.requesterId,
       kind: "waitlist_promoted",
       title: `A slot opened in ${room.name}`,
@@ -308,7 +308,7 @@ export function promoteWaitlist(
     });
 
     if (managerId) {
-      createNotification(db, {
+      await createNotification(db, {
         recipientId: managerId,
         kind: "decision_needed",
         title: `Waitlisted request back in review: ${room.name}`,
@@ -324,19 +324,19 @@ export function promoteWaitlist(
 }
 
 /** Position among waitlisted requests that want an overlapping time. */
-export function getWaitlistStanding(
+export async function getWaitlistStanding(
   db: RoomRelayDatabase,
   bookingId: string,
   now = new Date(),
-): AllocationStanding | null {
+): Promise<AllocationStanding | null> {
   return getAllocationStanding(db, bookingId, ["waitlisted"], now);
 }
 
 /** Position among pending requests that compete for an overlapping time. */
-export function getReviewStanding(
+export async function getReviewStanding(
   db: RoomRelayDatabase,
   bookingId: string,
   now = new Date(),
-): AllocationStanding | null {
+): Promise<AllocationStanding | null> {
   return getAllocationStanding(db, bookingId, ["pending"], now);
 }

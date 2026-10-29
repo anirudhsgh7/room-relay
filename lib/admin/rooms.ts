@@ -217,12 +217,12 @@ function parseFacilities(value: string): string[] {
   }
 }
 
-function bookingCounts(
+async function bookingCounts(
   db: RoomRelayDatabase,
   roomId: string,
   nowIso: string,
-): { pendingCount: number; waitlistCount: number; upcomingCount: number } {
-  const row = db
+): Promise<{ pendingCount: number; waitlistCount: number; upcomingCount: number }> {
+  const row = (await db
     .prepare(
       `SELECT
          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
@@ -230,9 +230,9 @@ function bookingCounts(
          SUM(CASE WHEN status IN ('approved', 'checked_in') THEN 1 ELSE 0 END) AS upcoming_count
        FROM bookings
        WHERE room_id = ?
-         AND julianday(end_at) > julianday(?)`,
+         AND end_at > ?`,
     )
-    .get(roomId, nowIso) as {
+    .get([roomId, nowIso])) as {
     pending_count: number | null;
     waitlist_count: number | null;
     upcoming_count: number | null;
@@ -245,12 +245,12 @@ function bookingCounts(
   };
 }
 
-function loadBlackouts(
+async function loadBlackouts(
   db: RoomRelayDatabase,
   roomId: string,
   nowIso: string,
-): AdminBlackout[] {
-  const rows = db
+): Promise<AdminBlackout[]> {
+  const rows = (await db
     .prepare(
       `SELECT
          blackout.id, blackout.starts_at, blackout.ends_at, blackout.reason,
@@ -259,10 +259,10 @@ function loadBlackouts(
        JOIN profiles creator ON creator.id = blackout.created_by
        WHERE blackout.room_id = ?
          AND blackout.removed_at IS NULL
-         AND julianday(blackout.ends_at) > julianday(?)
+         AND blackout.ends_at > ?
        ORDER BY blackout.starts_at`,
     )
-    .all(roomId, nowIso) as Array<{
+    .all([roomId, nowIso])) as Array<{
     id: string;
     starts_at: string;
     ends_at: string;
@@ -312,15 +312,15 @@ export function blackoutLabel(startsAt: string, endsAt: string): string {
   )} ${end.startTime}`;
 }
 
-function loadHours(db: RoomRelayDatabase, roomId: string): WeekdayHours[] {
-  const rows = db
+async function loadHours(db: RoomRelayDatabase, roomId: string): Promise<WeekdayHours[]> {
+  const rows = (await db
     .prepare(
       `SELECT weekday, opens_at, closes_at
        FROM availability_rules
        WHERE room_id = ? AND active = 1
        ORDER BY weekday, opens_at`,
     )
-    .all(roomId) as Array<{ weekday: number; opens_at: string; closes_at: string }>;
+    .all(roomId)) as Array<{ weekday: number; opens_at: string; closes_at: string }>;
 
   return WEEK_ORDER.map((weekday) => {
     const rule = rows.find((row) => row.weekday === weekday);
@@ -330,30 +330,28 @@ function loadHours(db: RoomRelayDatabase, roomId: string): WeekdayHours[] {
   });
 }
 
-export function listAdminRooms(
+export async function listAdminRooms(
   db: RoomRelayDatabase,
   actor: UserProfile,
-): AdminRoomListItem[] {
+): Promise<AdminRoomListItem[]> {
   if (!canUseRoomAdmin(actor)) {
     return [];
   }
 
   const nowIso = new Date().toISOString();
-  const rows = (
-    actor.role === "admin"
-      ? db.prepare(`${ROOM_SELECT} ORDER BY r.status, r.building, r.name`).all()
-      : db
-          .prepare(`${ROOM_SELECT} WHERE r.manager_id = ? ORDER BY r.status, r.building, r.name`)
-          .all(actor.id)
-  ) as RoomRow[];
+  const rows = (actor.role === "admin"
+    ? await db.prepare(`${ROOM_SELECT} ORDER BY r.status, r.building, r.name`).all()
+    : await db
+        .prepare(`${ROOM_SELECT} WHERE r.manager_id = ? ORDER BY r.status, r.building, r.name`)
+        .all(actor.id)) as RoomRow[];
 
-  return rows.map((row) => {
+  return Promise.all(rows.map(async (row) => {
     const openDays = (
-      db
+      (await db
         .prepare(
           "SELECT count(DISTINCT weekday) AS count FROM availability_rules WHERE room_id = ? AND active = 1",
         )
-        .get(row.id) as { count: number }
+        .get(row.id)) as { count: number }
     ).count;
 
     return {
@@ -367,18 +365,18 @@ export function listAdminRooms(
       managerName: row.manager_name,
       requestsEnabled: row.requests_enabled === 1,
       openDays,
-      nextBlackout: loadBlackouts(db, row.id, nowIso)[0] ?? null,
-      ...bookingCounts(db, row.id, nowIso),
+      nextBlackout: (await loadBlackouts(db, row.id, nowIso))[0] ?? null,
+      ...(await bookingCounts(db, row.id, nowIso)),
     };
-  });
+  }));
 }
 
-export function getAdminRoom(
+export async function getAdminRoom(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
-): { room: AdminRoomDetail; permissions: RoomPermissions } | null {
-  const row = db.prepare(`${ROOM_SELECT} WHERE r.id = ?`).get(roomId) as
+): Promise<{ room: AdminRoomDetail; permissions: RoomPermissions } | null> {
+  const row = (await db.prepare(`${ROOM_SELECT} WHERE r.id = ?`).get(roomId)) as
     | RoomRow
     | undefined;
 
@@ -409,16 +407,16 @@ export function getAdminRoom(
       managerId: row.manager_id,
       managerName: row.manager_name,
       policy: policyFromColumns(row),
-      hours: loadHours(db, row.id),
-      blackouts: loadBlackouts(db, row.id, nowIso),
-      ...bookingCounts(db, row.id, nowIso),
+      hours: await loadHours(db, row.id),
+      blackouts: await loadBlackouts(db, row.id, nowIso),
+      ...(await bookingCounts(db, row.id, nowIso)),
     },
   };
 }
 
-export function listAssignableManagers(db: RoomRelayDatabase): ManagerOption[] {
+export async function listAssignableManagers(db: RoomRelayDatabase): Promise<ManagerOption[]> {
   return (
-    db
+    (await db
       .prepare(
         `SELECT p.id, p.display_name,
            (SELECT count(*) FROM rooms r WHERE r.manager_id = p.id) AS room_count
@@ -426,7 +424,7 @@ export function listAssignableManagers(db: RoomRelayDatabase): ManagerOption[] {
          WHERE p.role = 'manager' AND p.status = 'active'
          ORDER BY p.display_name`,
       )
-      .all() as Array<{ id: string; display_name: string; room_count: number }>
+      .all()) as Array<{ id: string; display_name: string; room_count: number }>
   ).map((row) => ({
     id: row.id,
     displayName: row.display_name,
@@ -520,26 +518,26 @@ const updateSchema = detailsSchema.extend({
   confirmImpact: z.boolean().default(false),
 });
 
-function requireActiveManager(
+async function requireActiveManager(
   db: RoomRelayDatabase,
   managerId: string,
-): boolean {
-  const row = db
+): Promise<boolean> {
+  const row = await db
     .prepare("SELECT 1 FROM profiles WHERE id = ? AND role = 'manager' AND status = 'active'")
     .get(managerId);
   return Boolean(row);
 }
 
-function freshActor(
+async function freshActor(
   db: RoomRelayDatabase,
   actor: UserProfile,
-): UserProfile | null {
-  const fresh = getProfileById(db, actor.id);
+): Promise<UserProfile | null> {
+  const fresh = await getProfileById(db, actor.id);
   return fresh && fresh.status === "active" ? fresh : null;
 }
 
-function loadRoomRow(db: RoomRelayDatabase, roomId: string): RoomRow | null {
-  return (db.prepare(`${ROOM_SELECT} WHERE r.id = ?`).get(roomId) as RoomRow | undefined) ?? null;
+async function loadRoomRow(db: RoomRelayDatabase, roomId: string): Promise<RoomRow | null> {
+  return ((await db.prepare(`${ROOM_SELECT} WHERE r.id = ?`).get(roomId)) as RoomRow | undefined) ?? null;
 }
 
 interface ImpactRow {
@@ -563,15 +561,15 @@ function toImpact(row: ImpactRow): ImpactedBooking {
   };
 }
 
-function bookingsInWindow(
+async function bookingsInWindow(
   db: RoomRelayDatabase,
   roomId: string,
   startIso: string,
   endIso: string,
   statuses: BookingStatus[],
-): ImpactedBooking[] {
+): Promise<ImpactedBooking[]> {
   const list = statuses.map((status) => `'${status}'`).join(", ");
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT b.id, b.status, b.start_at, b.end_at, b.expected_attendance,
          requester.display_name AS requester_name
@@ -579,11 +577,11 @@ function bookingsInWindow(
        JOIN profiles requester ON requester.id = b.requester_id
        WHERE b.room_id = ?
          AND b.status IN (${list})
-         AND julianday(b.start_at) < julianday(?)
-         AND julianday(b.end_at) > julianday(?)
+         AND b.start_at < ?
+         AND b.end_at > ?
        ORDER BY b.start_at`,
     )
-    .all(roomId, endIso, startIso) as ImpactRow[];
+    .all([roomId, endIso, startIso])) as ImpactRow[];
 
   return rows.map(toImpact);
 }
@@ -609,11 +607,11 @@ export interface RoomDetailsInput {
 
 const DEFAULT_NEW_ROOM_HOURS = { opensAt: "09:00", closesAt: "17:00", weekdays: [1, 2, 3, 4, 5] };
 
-export function createRoom(
+export async function createRoom(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: RoomDetailsInput,
-): AdminResult<{ roomId: string }> {
+): Promise<AdminResult<{ roomId: string }>> {
   const parsed = createSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -622,14 +620,14 @@ export function createRoom(
 
   const data = parsed.data;
 
-  const execute = db.transaction((): AdminResult<{ roomId: string }> => {
-    const fresh = freshActor(db, actor);
+  const execute = db.transaction(async (): Promise<AdminResult<{ roomId: string }>> => {
+    const fresh = await freshActor(db, actor);
 
     if (!fresh || fresh.role !== "admin") {
       return { ok: false, kind: "forbidden", message: "Only administrators can add rooms." };
     }
 
-    if (!requireActiveManager(db, data.managerId)) {
+    if (!(await requireActiveManager(db, data.managerId))) {
       return {
         ok: false,
         kind: "validation",
@@ -638,7 +636,7 @@ export function createRoom(
       };
     }
 
-    const existing = db.prepare("SELECT 1 FROM rooms WHERE code = ? COLLATE NOCASE").get(data.code);
+    const existing = await db.prepare("SELECT 1 FROM rooms WHERE lower(code) = lower(?)").get(data.code);
 
     if (existing) {
       return {
@@ -652,12 +650,12 @@ export function createRoom(
     const nowIso = new Date().toISOString();
     const roomId = `room_${randomUUID()}`;
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO rooms (
          id, code, name, building, location, capacity, facilities,
          policy_summary, manager_id, status, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-    ).run(
+    ).run([
       roomId,
       data.code,
       data.name,
@@ -669,12 +667,12 @@ export function createRoom(
       data.managerId,
       nowIso,
       nowIso,
-    );
+    ]);
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO room_booking_policies (room_id, requests_enabled, updated_at)
        VALUES (?, 1, ?)`,
-    ).run(roomId, nowIso);
+    ).run([roomId, nowIso]);
 
     const effectiveFrom = campusToday();
     const insertRule = db.prepare(
@@ -685,7 +683,7 @@ export function createRoom(
     );
 
     for (const weekday of DEFAULT_NEW_ROOM_HOURS.weekdays) {
-      insertRule.run(
+      await insertRule.run([
         `avail_${randomUUID()}`,
         roomId,
         weekday,
@@ -694,10 +692,10 @@ export function createRoom(
         effectiveFrom,
         nowIso,
         nowIso,
-      );
+      ]);
     }
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: fresh.id,
       action: "room.created",
       entityType: "room",
@@ -708,7 +706,7 @@ export function createRoom(
       metadata: { code: data.code, managerId: data.managerId, capacity: data.capacity },
     });
 
-    createNotification(db, {
+    await createNotification(db, {
       recipientId: data.managerId,
       kind: "room_assignment",
       title: `You now manage ${data.name}`,
@@ -720,15 +718,15 @@ export function createRoom(
     return { ok: true, roomId };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }
 
-export function updateRoomDetails(
+export async function updateRoomDetails(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
   input: RoomDetailsInput,
-): AdminResult<{ cancelledCount: number; overCapacity: ImpactedBooking[] }> {
+): Promise<AdminResult<{ cancelledCount: number; overCapacity: ImpactedBooking[] }>> {
   const parsed = updateSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -738,9 +736,9 @@ export function updateRoomDetails(
   const data = parsed.data;
   type Result = AdminResult<{ cancelledCount: number; overCapacity: ImpactedBooking[] }>;
 
-  const execute = db.transaction((): Result => {
-    const fresh = freshActor(db, actor);
-    const room = loadRoomRow(db, roomId);
+  const execute = db.transaction(async (): Promise<Result> => {
+    const fresh = await freshActor(db, actor);
+    const room = await loadRoomRow(db, roomId);
 
     if (!fresh || !room) {
       return { ok: false, kind: "not_found", message: "That room could not be found." };
@@ -756,7 +754,7 @@ export function updateRoomDetails(
       };
     }
 
-    if (!requireActiveManager(db, data.managerId)) {
+    if (!(await requireActiveManager(db, data.managerId))) {
       return {
         ok: false,
         kind: "validation",
@@ -770,12 +768,12 @@ export function updateRoomDetails(
     let cancelledCount = 0;
 
     if (deactivating) {
-      const impact = bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
+      const impact = await bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
         "pending",
         "waitlisted",
         "approved",
       ]);
-      const inUse = bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, ["checked_in"]);
+      const inUse = await bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, ["checked_in"]);
 
       if ((impact.length > 0 || inUse.length > 0) && !data.confirmImpact) {
         return {
@@ -795,7 +793,7 @@ export function updateRoomDetails(
       const correlationId = randomUUID();
 
       for (const booking of impact) {
-        const cancelled = cancelAsStaffInTransaction(db, {
+        const cancelled = await cancelAsStaffInTransaction(db, {
           actor: fresh,
           bookingId: booking.id,
           reason: `${room.name} is closed and no longer taking bookings.`,
@@ -807,12 +805,12 @@ export function updateRoomDetails(
       }
     }
 
-    db.prepare(
+    await db.prepare(
       `UPDATE rooms
        SET name = ?, building = ?, location = ?, capacity = ?, facilities = ?,
            policy_summary = ?, manager_id = ?, status = ?, updated_at = ?
        WHERE id = ?`,
-    ).run(
+    ).run([
       data.name,
       data.building,
       data.location,
@@ -823,7 +821,7 @@ export function updateRoomDetails(
       data.status,
       nowIso,
       room.id,
-    );
+    ]);
 
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const compare: Array<[string, unknown, unknown]> = [
@@ -844,7 +842,7 @@ export function updateRoomDetails(
     }
 
     if (Object.keys(changes).length > 0) {
-      recordAudit(db, {
+      await recordAudit(db, {
         actorId: fresh.id,
         action: deactivating ? "room.deactivated" : "room.updated",
         entityType: "room",
@@ -861,7 +859,7 @@ export function updateRoomDetails(
     }
 
     if (room.manager_id !== data.managerId) {
-      createNotification(db, {
+      await createNotification(db, {
         recipientId: data.managerId,
         kind: "room_assignment",
         title: `You now manage ${data.name}`,
@@ -869,7 +867,7 @@ export function updateRoomDetails(
         linkPath: `/app/admin/rooms/${room.id}`,
         createdAt: nowIso,
       });
-      createNotification(db, {
+      await createNotification(db, {
         recipientId: room.manager_id,
         kind: "room_assignment",
         title: `${data.name} was reassigned`,
@@ -878,15 +876,15 @@ export function updateRoomDetails(
       });
     }
 
-    const overCapacity = bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
+    const overCapacity = (await bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
       "pending",
       "approved",
-    ]).filter((booking) => booking.expectedAttendance > data.capacity);
+    ])).filter((booking) => booking.expectedAttendance > data.capacity);
 
     return { ok: true, cancelledCount, overCapacity };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }
 
 // ---------------------------------------------------------------------------
@@ -934,12 +932,12 @@ const hoursSchema = z
     }
   });
 
-export function updateRoomHours(
+export async function updateRoomHours(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
   days: WeekdayHours[],
-): AdminResult<{ outsideHours: ImpactedBooking[] }> {
+): Promise<AdminResult<{ outsideHours: ImpactedBooking[] }>> {
   const parsed = hoursSchema.safeParse(days);
 
   if (!parsed.success) {
@@ -948,9 +946,9 @@ export function updateRoomHours(
 
   type Result = AdminResult<{ outsideHours: ImpactedBooking[] }>;
 
-  const execute = db.transaction((): Result => {
-    const fresh = freshActor(db, actor);
-    const room = loadRoomRow(db, roomId);
+  const execute = db.transaction(async (): Promise<Result> => {
+    const fresh = await freshActor(db, actor);
+    const room = await loadRoomRow(db, roomId);
 
     if (!fresh || !room) {
       return { ok: false, kind: "not_found", message: "That room could not be found." };
@@ -961,10 +959,10 @@ export function updateRoomHours(
     }
 
     const nowIso = new Date().toISOString();
-    const before = loadHours(db, room.id);
+    const before = await loadHours(db, room.id);
     const effectiveFrom = campusToday();
 
-    db.prepare("DELETE FROM availability_rules WHERE room_id = ?").run(room.id);
+    await db.prepare("DELETE FROM availability_rules WHERE room_id = ?").run(room.id);
 
     const insertRule = db.prepare(
       `INSERT INTO availability_rules (
@@ -975,7 +973,7 @@ export function updateRoomHours(
 
     for (const day of parsed.data) {
       if (day.open) {
-        insertRule.run(
+        await insertRule.run([
           `avail_${randomUUID()}`,
           room.id,
           day.weekday,
@@ -984,11 +982,11 @@ export function updateRoomHours(
           effectiveFrom,
           nowIso,
           nowIso,
-        );
+        ]);
       }
     }
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: fresh.id,
       action: "room.hours_updated",
       entityType: "room",
@@ -999,10 +997,10 @@ export function updateRoomHours(
       metadata: { before, after: parsed.data },
     });
 
-    const outsideHours = bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
+    const outsideHours = (await bookingsInWindow(db, room.id, nowIso, FAR_FUTURE, [
       "approved",
       "pending",
-    ]).filter((booking) => {
+    ])).filter((booking) => {
       const local = localIntervalParts(booking.startAt, booking.endAt);
       const day = parsed.data.find((item) => item.weekday === local.weekday);
 
@@ -1017,7 +1015,7 @@ export function updateRoomHours(
     return { ok: true, outsideHours };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1058,13 +1056,13 @@ export type PolicyInput = z.input<typeof policySchema>;
  * proposed changeover gap. Raising the gap past these would make the existing
  * schedule invalid, so it is refused until they are resolved.
  */
-function bufferViolations(
+async function bufferViolations(
   db: RoomRelayDatabase,
   roomId: string,
   bufferMinutes: number,
   nowIso: string,
-): Array<{ first: ImpactedBooking; second: ImpactedBooking }> {
-  const rows = db
+): Promise<Array<{ first: ImpactedBooking; second: ImpactedBooking }>> {
+  const rows = (await db
     .prepare(
       `SELECT b.id, b.status, b.start_at, b.end_at, b.expected_attendance,
          requester.display_name AS requester_name
@@ -1072,10 +1070,10 @@ function bufferViolations(
        JOIN profiles requester ON requester.id = b.requester_id
        WHERE b.room_id = ?
          AND b.status IN ('approved', 'checked_in')
-         AND julianday(b.end_at) > julianday(?)
+         AND b.end_at > ?
        ORDER BY b.start_at`,
     )
-    .all(roomId, nowIso) as ImpactRow[];
+    .all([roomId, nowIso])) as ImpactRow[];
   const violations: Array<{ first: ImpactedBooking; second: ImpactedBooking }> = [];
 
   for (let index = 1; index < rows.length; index += 1) {
@@ -1090,12 +1088,12 @@ function bufferViolations(
   return violations;
 }
 
-export function updateRoomPolicy(
+export async function updateRoomPolicy(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
   input: PolicyInput,
-): AdminResult<{ policy: RoomPolicy }> {
+): Promise<AdminResult<{ policy: RoomPolicy }>> {
   const parsed = policySchema.safeParse(input);
 
   if (!parsed.success) {
@@ -1105,9 +1103,9 @@ export function updateRoomPolicy(
   const data = parsed.data;
   type Result = AdminResult<{ policy: RoomPolicy }>;
 
-  const execute = db.transaction((): Result => {
-    const fresh = freshActor(db, actor);
-    const room = loadRoomRow(db, roomId);
+  const execute = db.transaction(async (): Promise<Result> => {
+    const fresh = await freshActor(db, actor);
+    const room = await loadRoomRow(db, roomId);
 
     if (!fresh || !room) {
       return { ok: false, kind: "not_found", message: "That room could not be found." };
@@ -1121,7 +1119,7 @@ export function updateRoomPolicy(
     const nowIso = new Date().toISOString();
 
     if (data.bufferMinutes > before.bufferMinutes) {
-      const violations = bufferViolations(db, room.id, data.bufferMinutes, nowIso);
+      const violations = await bufferViolations(db, room.id, data.bufferMinutes, nowIso);
 
       if (violations.length > 0) {
         const first = violations[0]!;
@@ -1135,7 +1133,7 @@ export function updateRoomPolicy(
       }
     }
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO room_booking_policies (
          room_id, requests_enabled, slot_interval_minutes, minimum_notice_minutes,
          maximum_duration_minutes, buffer_minutes, max_advance_days,
@@ -1181,7 +1179,7 @@ export function updateRoomPolicy(
       allocationRule: data.allocationRule,
     };
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: fresh.id,
       action: "room.policy_updated",
       entityType: "room",
@@ -1195,7 +1193,7 @@ export function updateRoomPolicy(
     return { ok: true, policy: after };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }
 
 // ---------------------------------------------------------------------------
@@ -1251,12 +1249,12 @@ function blackoutWindow(
   return startsAt && endsAt ? { startsAt, endsAt } : null;
 }
 
-export function addBlackout(
+export async function addBlackout(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
   input: BlackoutInput,
-): AdminResult<{ blackoutId: string; cancelledCount: number }> {
+): Promise<AdminResult<{ blackoutId: string; cancelledCount: number }>> {
   const parsed = blackoutSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -1286,9 +1284,9 @@ export function addBlackout(
 
   type Result = AdminResult<{ blackoutId: string; cancelledCount: number }>;
 
-  const execute = db.transaction((): Result => {
-    const fresh = freshActor(db, actor);
-    const room = loadRoomRow(db, roomId);
+  const execute = db.transaction(async (): Promise<Result> => {
+    const fresh = await freshActor(db, actor);
+    const room = await loadRoomRow(db, roomId);
 
     if (!fresh || !room) {
       return { ok: false, kind: "not_found", message: "That room could not be found." };
@@ -1309,12 +1307,12 @@ export function addBlackout(
       };
     }
 
-    const impact = bookingsInWindow(db, room.id, window.startsAt, window.endsAt, [
+    const impact = await bookingsInWindow(db, room.id, window.startsAt, window.endsAt, [
       "pending",
       "waitlisted",
       "approved",
     ]);
-    const inUse = bookingsInWindow(db, room.id, window.startsAt, window.endsAt, ["checked_in"]);
+    const inUse = await bookingsInWindow(db, room.id, window.startsAt, window.endsAt, ["checked_in"]);
 
     if ((impact.length > 0 || inUse.length > 0) && !data.confirmImpact) {
       return {
@@ -1334,16 +1332,16 @@ export function addBlackout(
     const blackoutId = `blackout_${randomUUID()}`;
     const correlationId = randomUUID();
 
-    db.prepare(
+    await db.prepare(
       `INSERT INTO room_blackouts (
          id, room_id, starts_at, ends_at, reason, created_by, created_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(blackoutId, room.id, window.startsAt, window.endsAt, data.reason, fresh.id, nowIso);
+    ).run([blackoutId, room.id, window.startsAt, window.endsAt, data.reason, fresh.id, nowIso]);
 
     let cancelledCount = 0;
 
     for (const booking of impact) {
-      const cancelled = cancelAsStaffInTransaction(db, {
+      const cancelled = await cancelAsStaffInTransaction(db, {
         actor: fresh,
         bookingId: booking.id,
         reason: `Room closed: ${data.reason}`,
@@ -1354,7 +1352,7 @@ export function addBlackout(
       cancelledCount += cancelled ? 1 : 0;
     }
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: fresh.id,
       action: "room.blackout_added",
       entityType: "room",
@@ -1377,20 +1375,20 @@ export function addBlackout(
     return { ok: true, blackoutId, cancelledCount };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }
 
-export function removeBlackout(
+export async function removeBlackout(
   db: RoomRelayDatabase,
   actor: UserProfile,
   roomId: string,
   blackoutId: string,
-): AdminResult<Record<never, never>> {
+): Promise<AdminResult<Record<never, never>>> {
   type Result = AdminResult<Record<never, never>>;
 
-  const execute = db.transaction((): Result => {
-    const fresh = freshActor(db, actor);
-    const room = loadRoomRow(db, roomId);
+  const execute = db.transaction(async (): Promise<Result> => {
+    const fresh = await freshActor(db, actor);
+    const room = await loadRoomRow(db, roomId);
 
     if (!fresh || !room) {
       return { ok: false, kind: "not_found", message: "That room could not be found." };
@@ -1400,11 +1398,11 @@ export function removeBlackout(
       return { ok: false, kind: "forbidden", message: "You cannot change closures for this room." };
     }
 
-    const blackout = db
+    const blackout = (await db
       .prepare(
         "SELECT id, starts_at, ends_at, reason FROM room_blackouts WHERE id = ? AND room_id = ? AND removed_at IS NULL",
       )
-      .get(blackoutId, room.id) as
+      .get([blackoutId, room.id])) as
       | { id: string; starts_at: string; ends_at: string; reason: string }
       | undefined;
 
@@ -1414,11 +1412,11 @@ export function removeBlackout(
 
     const nowIso = new Date().toISOString();
 
-    db.prepare(
+    await db.prepare(
       "UPDATE room_blackouts SET removed_at = ?, removed_by = ? WHERE id = ? AND removed_at IS NULL",
-    ).run(nowIso, fresh.id, blackout.id);
+    ).run([nowIso, fresh.id, blackout.id]);
 
-    recordAudit(db, {
+    await recordAudit(db, {
       actorId: fresh.id,
       action: "room.blackout_removed",
       entityType: "room",
@@ -1435,5 +1433,5 @@ export function removeBlackout(
     return { ok: true };
   });
 
-  return execute.immediate();
+  return await execute.immediate();
 }

@@ -56,7 +56,7 @@ export default async function ManagerQueuePage({
 
   const raw = await searchParams;
   const parsedFilters = parseManagerQueueFilters(raw);
-  const result = listManagerQueue(
+  const result = await listManagerQueue(
     getDatabase(),
     profile,
     parsedFilters.filters,

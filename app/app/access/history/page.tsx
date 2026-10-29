@@ -39,7 +39,7 @@ export default async function AccessHistoryPage({
   const profile = await requireCurrentProfile();
   const raw = await searchParams;
   const parsed = parseAccessHistoryFilters(raw);
-  const result = listAccessHistory(getDatabase(), profile, parsed.filters);
+  const result = await listAccessHistory(getDatabase(), profile, parsed.filters);
   const isStudent = profile.role === "student";
   const isAdmin = profile.role === "admin";
 

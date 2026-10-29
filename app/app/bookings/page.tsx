@@ -21,7 +21,7 @@ export default async function MyBookingsPage() {
   }
 
   const timezone = getCampusTimezone();
-  const bookings = listMyBookings(getDatabase(), profile);
+  const bookings = await listMyBookings(getDatabase(), profile);
   const pendingCount = bookings.filter(
     (booking) => booking.status === "pending",
   ).length;

@@ -17,10 +17,10 @@ export const metadata: Metadata = {
 export default async function AccessPage() {
   const profile = await requireCurrentProfile();
   const db = getDatabase();
-  const data = getAccessSimulatorData(db, profile);
+  const data = await getAccessSimulatorData(db, profile);
   const timezone = getCampusTimezone();
   const now = new Date();
-  const recent = listAccessHistory(db, profile, {
+  const recent = await listAccessHistory(db, profile, {
     roomCode: "",
     result: "all",
     reasonCode: "",

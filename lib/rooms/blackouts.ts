@@ -18,64 +18,64 @@ function toSummary(row: BlackoutRow): RoomBlackoutSummary {
 }
 
 /** Active blackouts that overlap the half-open interval [startUtc, endUtc). */
-export function findOverlappingBlackouts(
+export async function findOverlappingBlackouts(
   db: RoomRelayDatabase,
   roomId: string,
   startUtc: string,
   endUtc: string,
-): RoomBlackoutSummary[] {
-  const rows = db
+): Promise<RoomBlackoutSummary[]> {
+  const rows = (await db
     .prepare(
       `SELECT id, starts_at, ends_at, reason
        FROM room_blackouts
        WHERE room_id = ?
          AND removed_at IS NULL
-         AND julianday(starts_at) < julianday(?)
-         AND julianday(ends_at) > julianday(?)
+         AND starts_at < ?
+         AND ends_at > ?
        ORDER BY starts_at`,
     )
-    .all(roomId, endUtc, startUtc) as BlackoutRow[];
+    .all([roomId, endUtc, startUtc])) as BlackoutRow[];
 
   return rows.map(toSummary);
 }
 
 /** Active blackouts that have not ended yet, soonest first. */
-export function listUpcomingBlackouts(
+export async function listUpcomingBlackouts(
   db: RoomRelayDatabase,
   roomId: string,
   nowIso = new Date().toISOString(),
   limit = 20,
-): RoomBlackoutSummary[] {
-  const rows = db
+): Promise<RoomBlackoutSummary[]> {
+  const rows = (await db
     .prepare(
       `SELECT id, starts_at, ends_at, reason
        FROM room_blackouts
        WHERE room_id = ?
          AND removed_at IS NULL
-         AND julianday(ends_at) > julianday(?)
+         AND ends_at > ?
        ORDER BY starts_at
        LIMIT ?`,
     )
-    .all(roomId, nowIso, limit) as BlackoutRow[];
+    .all([roomId, nowIso, limit])) as BlackoutRow[];
 
   return rows.map(toSummary);
 }
 
 /** Every active blackout for a room that ends after `fromIso`. */
-export function loadActiveBlackoutWindows(
+export async function loadActiveBlackoutWindows(
   db: RoomRelayDatabase,
   roomId: string,
   fromIso: string,
-): Array<{ startMs: number; endMs: number }> {
-  const rows = db
+): Promise<Array<{ startMs: number; endMs: number }>> {
+  const rows = (await db
     .prepare(
       `SELECT starts_at, ends_at
        FROM room_blackouts
        WHERE room_id = ?
          AND removed_at IS NULL
-         AND julianday(ends_at) > julianday(?)`,
+         AND ends_at > ?`,
     )
-    .all(roomId, fromIso) as Array<{ starts_at: string; ends_at: string }>;
+    .all([roomId, fromIso])) as Array<{ starts_at: string; ends_at: string }>;
 
   return rows.map((row) => ({
     startMs: Date.parse(row.starts_at),

@@ -1,19 +1,25 @@
 import "./load-env";
-import { getDatabasePath } from "@/lib/config";
+import { getDatabaseUrl } from "@/lib/config";
 import { openDatabase } from "@/lib/db/client";
 import { runMigrations } from "@/lib/db/migrate";
 
-const databasePath = getDatabasePath();
-const db = openDatabase(databasePath);
+async function main(): Promise<void> {
+  const db = openDatabase(getDatabaseUrl());
 
-try {
-  const applied = runMigrations(db);
-  console.log(`Database: ${databasePath}`);
-  console.log(
-    applied.length > 0
-      ? `Applied migrations: ${applied.join(", ")}`
-      : "Migrations already up to date.",
-  );
-} finally {
-  db.close();
+  try {
+    const applied = await runMigrations(db);
+    console.log("Database: Postgres");
+    console.log(
+      applied.length > 0
+        ? `Applied migrations: ${applied.join(", ")}`
+        : "Migrations already up to date.",
+    );
+  } finally {
+    await db.close();
+  }
 }
+
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

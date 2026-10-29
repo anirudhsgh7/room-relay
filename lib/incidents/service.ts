@@ -62,11 +62,11 @@ const resolveSchema = z.object({
     .max(1500, "Keep the resolution note under 1,500 characters."),
 });
 
-function loadIncident(
+async function loadIncident(
   db: RoomRelayDatabase,
   incidentId: string,
-): IncidentRow | null {
-  const row = db
+): Promise<IncidentRow | null> {
+  const row = (await db
     .prepare(
       `SELECT
          i.id, i.booking_id, i.reporter_id, i.status,
@@ -77,7 +77,7 @@ function loadIncident(
        JOIN rooms r ON r.id = b.room_id
        WHERE i.id = ?`,
     )
-    .get(incidentId) as IncidentRow | undefined;
+    .get(incidentId)) as IncidentRow | undefined;
 
   return row ?? null;
 }
@@ -95,7 +95,7 @@ function canReviewIncident(
   );
 }
 
-function insertAudit(
+async function insertAudit(
   db: RoomRelayDatabase,
   input: {
     actor: UserProfile;
@@ -107,8 +107,8 @@ function insertAudit(
     correlationId: string;
     metadata: Record<string, unknown>;
   },
-): void {
-  db.prepare(
+): Promise<void> {
+  await db.prepare(
     `INSERT INTO audit_events (
        id, actor_id, action, entity_type, entity_id, occurred_at,
        summary, correlation_id, metadata_json
@@ -127,11 +127,11 @@ function insertAudit(
 }
 
 /** Manager/admin starts a review for an assigned-room incident. */
-export function reviewIncident(
+export async function reviewIncident(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: { incidentId: string; note: string },
-): IncidentActionResult {
+): Promise<IncidentActionResult> {
   const parsed = reviewSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -149,8 +149,8 @@ export function reviewIncident(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): IncidentActionResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<IncidentActionResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor) {
         return {
@@ -160,7 +160,7 @@ export function reviewIncident(
         };
       }
 
-      const incident = loadIncident(db, parsed.data.incidentId);
+      const incident = await loadIncident(db, parsed.data.incidentId);
 
       if (!incident || !canReviewIncident(freshActor, incident)) {
         return {
@@ -183,7 +183,7 @@ export function reviewIncident(
       }
 
       const nowIso = new Date().toISOString();
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE incidents
            SET status = 'reviewing',
@@ -210,7 +210,7 @@ export function reviewIncident(
         };
       }
 
-      insertAudit(db, {
+      await insertAudit(db, {
         actor: freshActor,
         action: "incident.review_started",
         entityType: "incident",
@@ -226,7 +226,7 @@ export function reviewIncident(
       });
 
       if (incident.reporter_id !== freshActor.id) {
-        createNotification(db, {
+        await createNotification(db, {
           recipientId: incident.reporter_id,
           kind: "incident_update",
           title: `Your reported issue is being reviewed: ${incident.room_name}`,
@@ -248,7 +248,7 @@ export function reviewIncident(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 
@@ -276,11 +276,11 @@ export function reviewIncident(
 }
 
 /** Administrator records final resolution; may complete the linked booking. */
-export function resolveIncident(
+export async function resolveIncident(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: { incidentId: string; resolutionNote: string },
-): IncidentActionResult {
+): Promise<IncidentActionResult> {
   const parsed = resolveSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -298,8 +298,8 @@ export function resolveIncident(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): IncidentActionResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<IncidentActionResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor || freshActor.role !== "admin") {
         return {
@@ -309,7 +309,7 @@ export function resolveIncident(
         };
       }
 
-      const incident = loadIncident(db, parsed.data.incidentId);
+      const incident = await loadIncident(db, parsed.data.incidentId);
 
       if (!incident) {
         return {
@@ -332,7 +332,7 @@ export function resolveIncident(
       }
 
       const nowIso = new Date().toISOString();
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE incidents
            SET status = 'resolved',
@@ -359,7 +359,7 @@ export function resolveIncident(
         };
       }
 
-      insertAudit(db, {
+      await insertAudit(db, {
         actor: freshActor,
         action: "incident.resolved",
         entityType: "incident",
@@ -374,19 +374,19 @@ export function resolveIncident(
         },
       });
 
-      const unresolved = db
+      const unresolved = (await db
         .prepare(
           `SELECT count(*) AS count
            FROM incidents
            WHERE booking_id = ?
              AND status IN ('open', 'reviewing')`,
         )
-        .get(incident.booking_id) as { count: number };
+        .get(incident.booking_id)) as { count: number };
 
       let bookingCompleted = false;
 
       if (unresolved.count === 0) {
-        const completeBooking = db
+        const completeBooking = await db
           .prepare(
             `UPDATE bookings
              SET status = 'completed',
@@ -399,7 +399,7 @@ export function resolveIncident(
 
         if (completeBooking.changes === 1) {
           bookingCompleted = true;
-          insertAudit(db, {
+          await insertAudit(db, {
             actor: freshActor,
             action: "booking.completed",
             entityType: "booking",
@@ -416,7 +416,7 @@ export function resolveIncident(
       }
 
       if (incident.reporter_id !== freshActor.id) {
-        createNotification(db, {
+        await createNotification(db, {
           recipientId: incident.reporter_id,
           kind: "incident_update",
           title: `Issue resolved: ${incident.room_name}`,
@@ -440,7 +440,7 @@ export function resolveIncident(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 

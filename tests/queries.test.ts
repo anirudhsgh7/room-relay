@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
 import { getFoundationSnapshot } from "@/lib/db/queries";
-import {
-  createSeededTestDatabase,
-} from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -18,16 +15,16 @@ describe("role-scoped foundation queries", () => {
     testDatabase.cleanup();
   });
 
-  it("shows a student only their own counts and no institution-wide data", () => {
-    const student = getProfileById(testDatabase.db, "usr_amelia_chen");
+  it("shows a student only their own counts and no institution-wide data", async () => {
+    const student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
     expect(student).not.toBeNull();
 
-    const snapshot = getFoundationSnapshot(testDatabase.db, student!);
+    const snapshot = await getFoundationSnapshot(testDatabase.db, student!);
 
     expect(snapshot).toMatchObject({
       activeRooms: 4,
       totalRooms: 5,
-      migrationsApplied: 6,
+      migrationsApplied: 1,
       assignedRooms: [],
       managedPendingBookings: null,
       ownActiveBookings: 4,
@@ -39,12 +36,12 @@ describe("role-scoped foundation queries", () => {
     });
   });
 
-  it("shows each manager only their assigned active rooms", () => {
-    const marcus = getProfileById(testDatabase.db, "usr_marcus_webb");
-    const priya = getProfileById(testDatabase.db, "usr_priya_nair");
+  it("shows each manager only their assigned active rooms", async () => {
+    const marcus = await getTestProfile(testDatabase.db, "usr_marcus_webb");
+    const priya = await getTestProfile(testDatabase.db, "usr_priya_nair");
 
-    const marcusSnapshot = getFoundationSnapshot(testDatabase.db, marcus!);
-    const priyaSnapshot = getFoundationSnapshot(testDatabase.db, priya!);
+    const marcusSnapshot = await getFoundationSnapshot(testDatabase.db, marcus!);
+    const priyaSnapshot = await getFoundationSnapshot(testDatabase.db, priya!);
 
     expect(marcusSnapshot.assignedRooms).toEqual([
       { code: "NEW-14", name: "Classroom 14" },
@@ -62,9 +59,9 @@ describe("role-scoped foundation queries", () => {
     expect(priyaSnapshot.institutionProfiles).toBeNull();
   });
 
-  it("gives an admin institution-wide aggregate visibility", () => {
-    const admin = getProfileById(testDatabase.db, "usr_rowan_ellis");
-    const snapshot = getFoundationSnapshot(testDatabase.db, admin!);
+  it("gives an admin institution-wide aggregate visibility", async () => {
+    const admin = await getTestProfile(testDatabase.db, "usr_rowan_ellis");
+    const snapshot = await getFoundationSnapshot(testDatabase.db, admin!);
 
     expect(snapshot).toMatchObject({
       activeRooms: 4,

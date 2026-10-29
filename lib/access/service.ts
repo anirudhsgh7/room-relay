@@ -104,23 +104,23 @@ function responseFor(input: {
   };
 }
 
-function findExistingEvent(
+async function findExistingEvent(
   db: RoomRelayDatabase,
   nonce: string,
-): ExistingEventRow | null {
-  const row = db
+): Promise<ExistingEventRow | null> {
+  const row = (await db
     .prepare(
       `SELECT id, actor_id, booking_id, result, reason_code, occurred_at,
               request_hash
        FROM access_events
        WHERE correlation_id = ?`,
     )
-    .get(nonce) as ExistingEventRow | undefined;
+    .get(nonce)) as ExistingEventRow | undefined;
 
   return row ?? null;
 }
 
-function insertEventAndAudit(
+async function insertEventAndAudit(
   db: RoomRelayDatabase,
   input: {
     actor: UserProfile;
@@ -134,10 +134,10 @@ function insertEventAndAudit(
     correlationId: string;
     requestHash: string;
   },
-): string {
+): Promise<string> {
   const eventId = `access_${randomUUID()}`;
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO access_events (
        id, credential_id, attempted_credential_ref, room_id, occurred_at,
        result, reason_code, source, correlation_id, created_at,
@@ -163,7 +163,7 @@ function insertEventAndAudit(
     request_hash: input.requestHash,
   });
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO audit_events (
        id, actor_id, action, entity_type, entity_id, occurred_at,
        summary, correlation_id, metadata_json
@@ -199,11 +199,11 @@ function insertEventAndAudit(
  * from trusted state. This service is the software equivalent of the future
  * access-policy boundary; it does not actuate a door.
  */
-export function simulateAccessCheck(
+export async function simulateAccessCheck(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: AccessCheckInput,
-): AccessServiceResult {
+): Promise<AccessServiceResult> {
   const parsed = accessCheckSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -224,8 +224,8 @@ export function simulateAccessCheck(
   const correlationId = parsed.data.eventNonce;
 
   try {
-    const execute = db.transaction((): AccessServiceResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<AccessServiceResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor) {
         return {
@@ -236,7 +236,7 @@ export function simulateAccessCheck(
         };
       }
 
-      const existing = findExistingEvent(db, correlationId);
+      const existing = await findExistingEvent(db, correlationId);
 
       if (existing) {
         if (
@@ -268,13 +268,13 @@ export function simulateAccessCheck(
       const now = new Date();
       const occurredAt = now.toISOString();
 
-      const room = db
+      const room = (await db
         .prepare(
           `SELECT id, code, name, status
            FROM rooms
            WHERE id = ?`,
         )
-        .get(parsed.data.roomId) as RoomRow | undefined;
+        .get(parsed.data.roomId)) as RoomRow | undefined;
 
       if (!room) {
         return {
@@ -292,7 +292,7 @@ export function simulateAccessCheck(
       const rate = consumeRateLimit(`access-check:${freshActor.id}`, RATE_LIMIT);
 
       if (!rate.allowed) {
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: null,
           attemptedCredentialRef: "rate-limited-simulator-attempt",
@@ -317,16 +317,16 @@ export function simulateAccessCheck(
         };
       }
 
-      const credential = db
+      const credential = (await db
         .prepare(
           `SELECT id, user_id, credential_ref, credential_type, active, revoked_at
            FROM credentials
            WHERE id = ?`,
         )
-        .get(parsed.data.credentialId) as CredentialRow | undefined;
+        .get(parsed.data.credentialId)) as CredentialRow | undefined;
 
       if (!credential) {
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: null,
           attemptedCredentialRef: "unmapped-simulator-credential",
@@ -352,7 +352,7 @@ export function simulateAccessCheck(
       }
 
       if (credential.user_id !== freshActor.id) {
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: null,
           attemptedCredentialRef: "unowned-simulator-credential",
@@ -378,7 +378,7 @@ export function simulateAccessCheck(
       }
 
       if (credential.active !== 1) {
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: credential.id,
           attemptedCredentialRef: credential.credential_ref,
@@ -404,7 +404,7 @@ export function simulateAccessCheck(
       }
 
       if (room.status !== "active") {
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: credential.id,
           attemptedCredentialRef: credential.credential_ref,
@@ -429,7 +429,7 @@ export function simulateAccessCheck(
         };
       }
 
-      const bookings = db
+      const bookings = (await db
         .prepare(
           `SELECT id, status, start_at, end_at
            FROM bookings
@@ -437,7 +437,7 @@ export function simulateAccessCheck(
              AND room_id = ?
            ORDER BY start_at DESC`,
         )
-        .all(freshActor.id, room.id) as BookingRow[];
+        .all([freshActor.id, room.id])) as BookingRow[];
 
       const activeBooking = bookings.find(
         (booking) =>
@@ -461,7 +461,7 @@ export function simulateAccessCheck(
             : "NO_APPROVED_BOOKING";
         const bookingId =
           approvedOrCheckedIn?.id ?? nonApproved?.id ?? null;
-        const eventId = insertEventAndAudit(db, {
+        const eventId = await insertEventAndAudit(db, {
           actor: freshActor,
           credentialId: credential.id,
           attemptedCredentialRef: credential.credential_ref,
@@ -492,13 +492,13 @@ export function simulateAccessCheck(
       let bookingStatus: string = activeBooking.status;
 
       if (activeBooking.status === "approved") {
-        const checkIn = db
+        const checkIn = await db
           .prepare(
             `UPDATE bookings
              SET status = 'checked_in', updated_at = ?
              WHERE id = ? AND status = 'approved'`,
           )
-          .run(occurredAt, activeBooking.id);
+          .run([occurredAt, activeBooking.id]);
 
         if (checkIn.changes !== 1) {
           return {
@@ -512,7 +512,7 @@ export function simulateAccessCheck(
         bookingStatus = "checked_in";
       }
 
-      const eventId = insertEventAndAudit(db, {
+      const eventId = await insertEventAndAudit(db, {
         actor: freshActor,
         credentialId: credential.id,
         attemptedCredentialRef: credential.credential_ref,
@@ -539,7 +539,7 @@ export function simulateAccessCheck(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     console.error(
       "Access check failed:",

@@ -30,21 +30,21 @@ const CONFIRMED_STATUSES = ["approved", "checked_in"] as const;
  * occupies its own interval plus the room's changeover buffer, and so does the
  * candidate, so the result does not depend on which booking was approved first.
  */
-export function getBlockingBookings(
+export async function getBlockingBookings(
   db: RoomRelayDatabase,
   roomId: string,
   startUtc: string,
   endUtc: string,
   bufferMinutes: number,
-): BlockingBooking[] {
-  const rows = db
+): Promise<BlockingBooking[]> {
+  const rows = (await db
     .prepare(
       `SELECT id, room_id, start_at, end_at
        FROM bookings
        WHERE room_id = @room_id
          AND status IN ('approved', 'checked_in')
-         AND julianday(start_at) < julianday(@end_at) + (@buffer / 1440.0)
-         AND julianday(end_at) + (@buffer / 1440.0) > julianday(@start_at)
+         AND start_at < @end_at::timestamptz + (@buffer * interval '1 minute')
+         AND end_at + (@buffer * interval '1 minute') > @start_at::timestamptz
        ORDER BY start_at`,
     )
     .all({
@@ -52,7 +52,7 @@ export function getBlockingBookings(
       start_at: startUtc,
       end_at: endUtc,
       buffer: bufferMinutes,
-    }) as BlockingBookingRow[];
+    })) as BlockingBookingRow[];
 
   return rows.map((row) => ({
     id: row.id,
@@ -62,11 +62,11 @@ export function getBlockingBookings(
   }));
 }
 
-export function getAllBlockingBookings(
+export async function getAllBlockingBookings(
   db: RoomRelayDatabase,
   roomId: string,
-): BlockingBooking[] {
-  const rows = db
+): Promise<BlockingBooking[]> {
+  const rows = (await db
     .prepare(
       `SELECT id, room_id, start_at, end_at
        FROM bookings
@@ -74,7 +74,7 @@ export function getAllBlockingBookings(
          AND status IN ('approved', 'checked_in')
        ORDER BY start_at`,
     )
-    .all(roomId) as BlockingBookingRow[];
+    .all(roomId)) as BlockingBookingRow[];
 
   return rows.map((row) => ({
     id: row.id,
@@ -84,15 +84,15 @@ export function getAllBlockingBookings(
   }));
 }
 
-export function checkRoomSchedule(
+export async function checkRoomSchedule(
   db: RoomRelayDatabase,
   roomId: string,
   date: string,
   weekday: number,
   startMinutes: number,
   endMinutes: number,
-): boolean {
-  const rule = db
+): Promise<boolean> {
+  const rule = await db
     .prepare(
       `SELECT id
        FROM availability_rules
@@ -106,40 +106,40 @@ export function checkRoomSchedule(
        ORDER BY opens_at, closes_at
        LIMIT 1`,
     )
-    .get(
+    .get([
       roomId,
       weekday,
       date,
       date,
       minutesToTime(startMinutes),
       minutesToTime(endMinutes),
-    );
+    ]);
 
   return Boolean(rule);
 }
 
-export function checkRoomAvailability(
+export async function checkRoomAvailability(
   db: RoomRelayDatabase,
   input: {
     roomId: string;
     interval: CampusInterval;
     bufferMinutes: number;
   },
-): AvailabilityCheck {
+): Promise<AvailabilityCheck> {
   if (
-    !checkRoomSchedule(
+    !(await checkRoomSchedule(
       db,
       input.roomId,
       input.interval.date,
       input.interval.weekday,
       input.interval.startMinutes,
       input.interval.endMinutes,
-    )
+    ))
   ) {
     return { code: "outside_hours" };
   }
 
-  const [blackout] = findOverlappingBlackouts(
+  const [blackout] = await findOverlappingBlackouts(
     db,
     input.roomId,
     input.interval.startUtc,
@@ -150,7 +150,7 @@ export function checkRoomAvailability(
     return { code: "blackout", blackoutReason: blackout.reason };
   }
 
-  const [conflict] = getBlockingBookings(
+  const [conflict] = await getBlockingBookings(
     db,
     input.roomId,
     input.interval.startUtc,
@@ -183,7 +183,7 @@ export function isConfirmedStatus(status: string): boolean {
   return CONFIRMED_STATUSES.includes(status as (typeof CONFIRMED_STATUSES)[number]);
 }
 
-export function findPendingDuplicate(
+export async function findPendingDuplicate(
   db: RoomRelayDatabase,
   input: {
     requesterId: string;
@@ -191,32 +191,35 @@ export function findPendingDuplicate(
     startUtc: string;
     endUtc: string;
   },
-): string | null {
-  const row = db
+): Promise<string | null> {
+  const row = (await db
     .prepare(
       `SELECT id
        FROM bookings
-       WHERE requester_id = ?
-         AND room_id = ?
+       WHERE requester_id = @requester_id
+         AND room_id = @room_id
          AND status IN ('pending', 'waitlisted')
-         AND julianday(start_at) < julianday(?)
-         AND julianday(end_at) > julianday(?)
+         AND start_at < @end_at
+         AND end_at > @start_at
        ORDER BY created_at
        LIMIT 1`,
     )
-    .get(input.requesterId, input.roomId, input.endUtc, input.startUtc) as
-    | { id: string }
-    | undefined;
+    .get({
+      requester_id: input.requesterId,
+      room_id: input.roomId,
+      start_at: input.startUtc,
+      end_at: input.endUtc,
+    })) as { id: string } | undefined;
 
   return row?.id ?? null;
 }
 
-export function findVerifiedRequirementIds(
+export async function findVerifiedRequirementIds(
   db: RoomRelayDatabase,
   profileId: string,
   roomId: string,
-): Set<string> {
-  const rows = db
+): Promise<Set<string>> {
+  const rows = (await db
     .prepare(
       `SELECT er.id
        FROM eligibility_requirements er
@@ -229,7 +232,7 @@ export function findVerifiedRequirementIds(
          AND pe.status = 'verified'
          AND (pe.expires_at IS NULL OR pe.expires_at > ?)`,
     )
-    .all(profileId, roomId, new Date().toISOString()) as Array<{ id: string }>;
+    .all([profileId, roomId, new Date().toISOString()])) as Array<{ id: string }>;
 
   return new Set(rows.map((row) => row.id));
 }

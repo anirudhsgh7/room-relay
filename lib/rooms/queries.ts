@@ -66,11 +66,11 @@ function policyFromRow(row: RoomRow): RoomPolicy {
   return policyFromColumns(row);
 }
 
-function availabilityFor(
+async function availabilityFor(
   db: RoomRelayDatabase,
   row: RoomRow,
   interval: CampusInterval | null,
-): RoomAvailabilityCode | null {
+): Promise<RoomAvailabilityCode | null> {
   const policy = policyFromRow(row);
 
   if (row.status !== "active" || !policy.requestsEnabled) {
@@ -89,19 +89,21 @@ function availabilityFor(
     return "invalid_time";
   }
 
-  return checkRoomAvailability(db, {
-    roomId: row.id,
-    interval,
-    bufferMinutes: policy.bufferMinutes,
-  }).code;
+  return (
+    await checkRoomAvailability(db, {
+      roomId: row.id,
+      interval,
+      bufferMinutes: policy.bufferMinutes,
+    })
+  ).code;
 }
 
-function baseSummary(
+async function baseSummary(
   db: RoomRelayDatabase,
   row: RoomRow,
   interval: CampusInterval | null,
   requirements: RoomRequirement[],
-): RoomSummary {
+): Promise<RoomSummary> {
   const policy = policyFromRow(row);
 
   return {
@@ -114,7 +116,7 @@ function baseSummary(
     facilities: parseStringArray(row.facilities),
     policySummary: row.policy_summary,
     policy,
-    availability: availabilityFor(db, row, interval),
+    availability: await availabilityFor(db, row, interval),
     requiredRequirementCount: requirements.filter(
       (requirement) => requirement.required,
     ).length,
@@ -146,11 +148,11 @@ function requirementVerification(
   return null;
 }
 
-function loadRequirements(
+async function loadRequirements(
   db: RoomRelayDatabase,
   roomIds: string[],
   profile: UserProfile,
-): Map<string, RoomRequirement[]> {
+): Promise<Map<string, RoomRequirement[]>> {
   const result = new Map<string, RoomRequirement[]>();
 
   if (roomIds.length === 0) {
@@ -159,7 +161,7 @@ function loadRequirements(
 
   const placeholders = roomIds.map(() => "?").join(", ");
   const now = new Date().toISOString();
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT
          er.room_id,
@@ -177,7 +179,10 @@ function loadRequirements(
          AND er.room_id IN (${placeholders})
        ORDER BY er.room_id, er.required DESC, er.description`,
     )
-    .all(profile.role === "student" ? profile.id : null, ...roomIds) as RequirementRow[];
+    .all([
+      profile.role === "student" ? profile.id : null,
+      ...roomIds,
+    ])) as RequirementRow[];
 
   for (const row of rows) {
     const list = result.get(row.room_id) ?? [];
@@ -195,13 +200,13 @@ function loadRequirements(
   return result;
 }
 
-export function getCurrentRequirementsForProfile(
+export async function getCurrentRequirementsForProfile(
   db: RoomRelayDatabase,
   roomId: string,
   profileId: string,
-): RoomRequirement[] {
+): Promise<RoomRequirement[]> {
   const now = new Date().toISOString();
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT
          er.room_id,
@@ -219,7 +224,7 @@ export function getCurrentRequirementsForProfile(
          AND er.active = 1
        ORDER BY er.required DESC, er.description`,
     )
-    .all(profileId, roomId) as RequirementRow[];
+    .all([profileId, roomId])) as RequirementRow[];
 
   return rows.map((row) => ({
     id: row.id,
@@ -230,29 +235,29 @@ export function getCurrentRequirementsForProfile(
   }));
 }
 
-export function getOutstandingMandatoryRequirements(
+export async function getOutstandingMandatoryRequirements(
   db: RoomRelayDatabase,
   roomId: string,
   profileId: string,
-): RoomRequirement[] {
-  return getCurrentRequirementsForProfile(db, roomId, profileId).filter(
+): Promise<RoomRequirement[]> {
+  return (await getCurrentRequirementsForProfile(db, roomId, profileId)).filter(
     (requirement) =>
       requirement.required && requirement.verification !== "verified",
   );
 }
 
-export function getRoomFilterOptions(db: RoomRelayDatabase): {
+export async function getRoomFilterOptions(db: RoomRelayDatabase): Promise<{
   buildings: string[];
   facilities: string[];
-} {
-  const rows = db
+}> {
+  const rows = (await db
     .prepare(
       `SELECT building, facilities
        FROM rooms
        WHERE status = 'active'
        ORDER BY building, code`,
     )
-    .all() as Array<{ building: string; facilities: string }>;
+    .all()) as Array<{ building: string; facilities: string }>;
 
   const buildings = [...new Set(rows.map((row) => row.building))].sort((a, b) =>
     a.localeCompare(b),
@@ -266,12 +271,12 @@ export function getRoomFilterOptions(db: RoomRelayDatabase): {
   return { buildings, facilities };
 }
 
-export function searchRooms(
+export async function searchRooms(
   db: RoomRelayDatabase,
   profile: UserProfile,
   filters: RoomSearchFilters,
   interval: CampusInterval | null,
-): RoomSummary[] {
+): Promise<RoomSummary[]> {
   const conditions = ["r.status = 'active'"];
   const parameters: Array<string | number> = [];
 
@@ -281,18 +286,18 @@ export function searchRooms(
   }
 
   if (filters.building) {
-    conditions.push("r.building = ? COLLATE NOCASE");
+    conditions.push("lower(r.building) = lower(?)");
     parameters.push(filters.building);
   }
 
   for (const facility of filters.facilities) {
     conditions.push(
-      "EXISTS (SELECT 1 FROM json_each(r.facilities) AS selected_facility WHERE selected_facility.value = ? COLLATE NOCASE)",
+      "EXISTS (SELECT 1 FROM jsonb_array_elements_text(r.facilities) AS selected_facility(value) WHERE lower(selected_facility.value) = lower(?))",
     );
     parameters.push(facility);
   }
 
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT
          r.id, r.code, r.name, r.building, r.location, r.capacity,
@@ -304,16 +309,18 @@ export function searchRooms(
        ORDER BY r.capacity, r.building, r.code
        LIMIT 100`,
     )
-    .all(...parameters) as RoomRow[];
+    .all(parameters)) as RoomRow[];
 
-  const requirements = loadRequirements(
+  const requirements = await loadRequirements(
     db,
     rows.map((row) => row.id),
     profile,
   );
 
-  const summaries = rows.map((row) =>
-    baseSummary(db, row, interval, requirements.get(row.id) ?? []),
+  const summaries = await Promise.all(
+    rows.map((row) =>
+      baseSummary(db, row, interval, requirements.get(row.id) ?? []),
+    ),
   );
 
   if (interval) {
@@ -332,13 +339,13 @@ export function searchRooms(
   return summaries;
 }
 
-export function getRoomDetail(
+export async function getRoomDetail(
   db: RoomRelayDatabase,
   profile: UserProfile,
   code: string,
   interval: CampusInterval | null,
-): RoomDetail | null {
-  const row = db
+): Promise<RoomDetail | null> {
+  const row = (await db
     .prepare(
       `SELECT
          r.id, r.code, r.name, r.building, r.location, r.capacity,
@@ -346,29 +353,30 @@ export function getRoomDetail(
          ${POLICY_SELECT_COLUMNS}
        FROM rooms r
        LEFT JOIN room_booking_policies policy ON policy.room_id = r.id
-       WHERE r.code = ? COLLATE NOCASE
+       WHERE lower(r.code) = lower(?)
          AND r.status = 'active'`,
     )
-    .get(code) as RoomRow | undefined;
+    .get(code)) as RoomRow | undefined;
 
   if (!row) {
     return null;
   }
 
-  const requirements = loadRequirements(db, [row.id], profile).get(row.id) ?? [];
-  const hours = db
+  const requirements =
+    (await loadRequirements(db, [row.id], profile)).get(row.id) ?? [];
+  const hours = (await db
     .prepare(
       `SELECT weekday, opens_at, closes_at, effective_from, effective_until
        FROM availability_rules
        WHERE room_id = ? AND active = 1
        ORDER BY weekday, opens_at`,
     )
-    .all(row.id) as HoursRow[];
+    .all(row.id)) as HoursRow[];
 
   return {
-    ...baseSummary(db, row, interval, requirements),
+    ...(await baseSummary(db, row, interval, requirements)),
     requirements,
-    upcomingBlackouts: listUpcomingBlackouts(db, row.id),
+    upcomingBlackouts: await listUpcomingBlackouts(db, row.id),
     hours: hours.map<RoomHours>((rule) => ({
       weekday: rule.weekday,
       opensAt: rule.opens_at,
@@ -379,11 +387,11 @@ export function getRoomDetail(
   };
 }
 
-export function getRoomForRequest(
+export async function getRoomForRequest(
   db: RoomRelayDatabase,
   profile: UserProfile,
   code: string,
-): RoomDetail | null {
+): Promise<RoomDetail | null> {
   return getRoomDetail(db, profile, code, null);
 }
 

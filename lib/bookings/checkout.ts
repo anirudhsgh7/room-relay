@@ -134,11 +134,11 @@ function fieldErrors(error: z.ZodError): CheckoutFieldErrors {
   return result;
 }
 
-function loadBooking(
+async function loadBooking(
   db: RoomRelayDatabase,
   bookingId: string,
-): CheckoutBookingRow | null {
-  const row = db
+): Promise<CheckoutBookingRow | null> {
+  const row = (await db
     .prepare(
       `SELECT
          b.id, b.room_id, b.requester_id, b.status, b.start_at, b.end_at,
@@ -147,7 +147,7 @@ function loadBooking(
        JOIN rooms r ON r.id = b.room_id
        WHERE b.id = ?`,
     )
-    .get(bookingId) as CheckoutBookingRow | undefined;
+    .get(bookingId)) as CheckoutBookingRow | undefined;
 
   return row ?? null;
 }
@@ -156,11 +156,11 @@ function loadBooking(
  * Requester check-out. The after-use report, optional incident, booking status,
  * timestamps, and audit events all commit in one immediate transaction.
  */
-export function checkOutBooking(
+export async function checkOutBooking(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: CheckoutInput,
-): CheckoutResult {
+): Promise<CheckoutResult> {
   const parsed = checkoutSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -177,8 +177,8 @@ export function checkOutBooking(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): CheckoutResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<CheckoutResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor) {
         return {
@@ -188,7 +188,7 @@ export function checkOutBooking(
         };
       }
 
-      const booking = loadBooking(db, data.bookingId);
+      const booking = await loadBooking(db, data.bookingId);
 
       if (!booking || booking.requester_id !== freshActor.id) {
         return {
@@ -210,7 +210,7 @@ export function checkOutBooking(
         };
       }
 
-      const existingReport = db
+      const existingReport = await db
         .prepare(
           "SELECT id FROM condition_reports WHERE booking_id = ? AND stage = 'after'",
         )
@@ -229,7 +229,7 @@ export function checkOutBooking(
       const reportId = `condition_${randomUUID()}`;
       const issueFound = data.conditionState === "issue_found";
 
-      db.prepare(
+      await db.prepare(
         `INSERT INTO condition_reports (
            id, booking_id, stage, condition_state, notes, submitted_by, created_at
          ) VALUES (?, ?, 'after', ?, ?, ?, ?)`,
@@ -242,7 +242,7 @@ export function checkOutBooking(
         nowIso,
       );
 
-      db.prepare(
+      await db.prepare(
         `INSERT INTO audit_events (
            id, actor_id, action, entity_type, entity_id, occurred_at,
            summary, correlation_id, metadata_json
@@ -268,7 +268,7 @@ export function checkOutBooking(
 
       if (issueFound) {
         incidentId = `incident_${randomUUID()}`;
-        db.prepare(
+        await db.prepare(
           `INSERT INTO incidents (
              id, booking_id, category, description, status, reporter_id,
              reviewer_id, resolution_note, created_at, updated_at,
@@ -285,7 +285,7 @@ export function checkOutBooking(
           nowIso,
         );
 
-        db.prepare(
+        await db.prepare(
           `INSERT INTO audit_events (
              id, actor_id, action, entity_type, entity_id, occurred_at,
              summary, correlation_id, metadata_json
@@ -304,7 +304,7 @@ export function checkOutBooking(
         );
       }
 
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE bookings
            SET status = @status,
@@ -336,7 +336,7 @@ export function checkOutBooking(
       }
 
       if (!issueFound) {
-        db.prepare(
+        await db.prepare(
           `INSERT INTO audit_events (
              id, actor_id, action, entity_type, entity_id, occurred_at,
              summary, correlation_id, metadata_json
@@ -356,10 +356,10 @@ export function checkOutBooking(
       }
 
       if (issueFound && incidentId) {
-        const managerId = activeRoomManagerId(db, booking.room_id);
+        const managerId = await activeRoomManagerId(db, booking.room_id);
 
         if (managerId) {
-          createNotification(db, {
+          await createNotification(db, {
             recipientId: managerId,
             kind: "incident_update",
             title: `Issue reported: ${booking.room_name}`,
@@ -375,7 +375,7 @@ export function checkOutBooking(
 
       // Leaving early frees the rest of the slot for anyone waitlisted.
       if (Date.parse(booking.end_at) > Date.parse(nowIso)) {
-        promoteWaitlist(db, {
+        await promoteWaitlist(db, {
           roomId: booking.room_id,
           freedStartAt: nowIso,
           freedEndAt: booking.end_at,
@@ -398,7 +398,7 @@ export function checkOutBooking(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 

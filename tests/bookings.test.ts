@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { getMyBooking, listMyBookings } from "@/lib/bookings/queries";
 import { submitBookingRequest } from "@/lib/bookings/service";
 import type { BookingRequestSubmission } from "@/lib/bookings/validation";
 import { clearRateLimitsForTests } from "@/lib/rate-limit";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
@@ -28,26 +28,26 @@ function submission(
   };
 }
 
-function auditCount(testDatabase: SeededTestDatabase): number {
+async function auditCount(testDatabase: SeededTestDatabase): Promise<number> {
   return (
-    testDatabase.db
+    (await testDatabase.db
       .prepare("SELECT count(*) AS count FROM audit_events")
-      .get() as { count: number }
+      .get()) as { count: number }
   ).count;
 }
 
 describe("booking request service", () => {
   let testDatabase: SeededTestDatabase;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
-  let manager: NonNullable<ReturnType<typeof getProfileById>>;
+  let student: UserProfile;
+  let manager: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
     clearRateLimitsForTests();
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-    manager = getProfileById(testDatabase.db, "usr_marcus_webb")!;
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+    manager = await getTestProfile(testDatabase.db, "usr_marcus_webb");
   });
 
   afterEach(() => {
@@ -56,9 +56,9 @@ describe("booking request service", () => {
     testDatabase.cleanup();
   });
 
-  it("persists a valid request as pending and appends one audit event", () => {
-    const beforeAudit = auditCount(testDatabase);
-    const result = submitBookingRequest(
+  it("persists a valid request as pending and appends one audit event", async () => {
+    const beforeAudit = await auditCount(testDatabase);
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission(),
@@ -73,13 +73,13 @@ describe("booking request service", () => {
     expect(result.receipt.startAt).toBe("2026-10-29T10:00:00Z");
     expect(result.receipt.endAt).toBe("2026-10-29T11:30:00Z");
 
-    const row = testDatabase.db
+    const row = (await testDatabase.db
       .prepare(
         `SELECT status, requester_id, decided_by, decided_at, decision_reason,
                 submission_key, request_payload_hash, eligibility_snapshot_json
          FROM bookings WHERE id = ?`,
       )
-      .get(result.receipt.id) as {
+      .get(result.receipt.id)) as {
       status: string;
       requester_id: string;
       decided_by: string | null;
@@ -105,11 +105,11 @@ describe("booking request service", () => {
         status: "verified",
       }),
     ]);
-    expect(auditCount(testDatabase)).toBe(beforeAudit + 1);
+    expect(await auditCount(testDatabase)).toBe(beforeAudit + 1);
   });
 
-  it("ignores forged status, requester, and decision fields", () => {
-    const result = submitBookingRequest(testDatabase.db, student, {
+  it("ignores forged status, requester, and decision fields", async () => {
+    const result = await submitBookingRequest(testDatabase.db, student, {
       ...submission(),
       status: "approved",
       requesterId: "usr_marcus_webb",
@@ -119,11 +119,11 @@ describe("booking request service", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    const row = testDatabase.db
+    const row = (await testDatabase.db
       .prepare(
         "SELECT status, requester_id, decided_by FROM bookings WHERE id = ?",
       )
-      .get(result.receipt.id) as {
+      .get(result.receipt.id)) as {
       status: string;
       requester_id: string;
       decided_by: string | null;
@@ -136,10 +136,10 @@ describe("booking request service", () => {
     });
   });
 
-  it("returns the original receipt for an idempotent retry", () => {
+  it("returns the original receipt for an idempotent retry", async () => {
     const payload = submission();
-    const first = submitBookingRequest(testDatabase.db, student, payload);
-    const second = submitBookingRequest(testDatabase.db, student, payload);
+    const first = await submitBookingRequest(testDatabase.db, student, payload);
+    const second = await submitBookingRequest(testDatabase.db, student, payload);
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
@@ -148,18 +148,18 @@ describe("booking request service", () => {
     expect(second.kind).toBe("existing");
     expect(second.receipt.id).toBe(first.receipt.id);
 
-    const count = testDatabase.db
+    const count = (await testDatabase.db
       .prepare("SELECT count(*) AS count FROM bookings")
-      .get() as { count: number };
+      .get()) as { count: number };
     expect(count.count).toBe(11);
   });
 
-  it("rejects an idempotency key reused with a different payload", () => {
+  it("rejects an idempotency key reused with a different payload", async () => {
     const payload = submission();
-    const first = submitBookingRequest(testDatabase.db, student, payload);
+    const first = await submitBookingRequest(testDatabase.db, student, payload);
     expect(first.ok).toBe(true);
 
-    const second = submitBookingRequest(
+    const second = await submitBookingRequest(
       testDatabase.db,
       student,
       {
@@ -175,8 +175,8 @@ describe("booking request service", () => {
     });
   });
 
-  it("blocks a confirmed slot and returns safe alternatives", () => {
-    const result = submitBookingRequest(
+  it("blocks a confirmed slot and returns safe alternatives", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({ startTime: "16:00", endTime: "17:30" }),
@@ -192,8 +192,8 @@ describe("booking request service", () => {
     expect(result.alternatives.length).toBeGreaterThan(0);
   });
 
-  it("allows an interval starting exactly when a confirmed booking ends", () => {
-    const result = submitBookingRequest(
+  it("allows an interval starting exactly when a confirmed booking ends", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -209,8 +209,8 @@ describe("booking request service", () => {
     }
   });
 
-  it("allows a request ending exactly at room closing time", () => {
-    const result = submitBookingRequest(
+  it("allows a request ending exactly at room closing time", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -230,8 +230,8 @@ describe("booking request service", () => {
     }
   });
 
-  it("blocks the same student's overlapping pending request", () => {
-    const result = submitBookingRequest(
+  it("blocks the same student's overlapping pending request", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -251,8 +251,8 @@ describe("booking request service", () => {
     });
   });
 
-  it("enforces capacity and returns a field error", () => {
-    const result = submitBookingRequest(
+  it("enforces capacity and returns a field error", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({ expectedAttendance: "19" }),
@@ -267,9 +267,9 @@ describe("booking request service", () => {
     });
   });
 
-  it("enforces minimum notice, slot boundaries, and duration", () => {
+  it("enforces minimum notice, slot boundaries, and duration", async () => {
     vi.setSystemTime(new Date("2026-10-28T12:10:00.000Z"));
-    const tooSoon = submitBookingRequest(
+    const tooSoon = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -278,12 +278,12 @@ describe("booking request service", () => {
         endTime: "13:00",
       }),
     );
-    const offBoundary = submitBookingRequest(
+    const offBoundary = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({ startTime: "10:15", endTime: "11:15" }),
     );
-    const tooLong = submitBookingRequest(
+    const tooLong = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({ startTime: "08:00", endTime: "13:00" }),
@@ -303,13 +303,13 @@ describe("booking request service", () => {
     }
   });
 
-  it("rejects out-of-hours and malformed local intervals", () => {
-    const outside = submitBookingRequest(
+  it("rejects out-of-hours and malformed local intervals", async () => {
+    const outside = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({ startTime: "23:00", endTime: "23:30" }),
     );
-    const dstGap = submitBookingRequest(
+    const dstGap = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -323,8 +323,8 @@ describe("booking request service", () => {
     expect(dstGap).toMatchObject({ ok: false, kind: "validation" });
   });
 
-  it("allows managers to browse but not submit student requests", () => {
-    const result = submitBookingRequest(
+  it("allows managers to browse but not submit student requests", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       manager,
       submission(),
@@ -333,8 +333,8 @@ describe("booking request service", () => {
     expect(result).toMatchObject({ ok: false, kind: "forbidden" });
   });
 
-  it("shows unverified eligibility warnings without blocking a pending request", () => {
-    const result = submitBookingRequest(
+  it("shows unverified eligibility warnings without blocking a pending request", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission({
@@ -358,8 +358,8 @@ describe("booking request service", () => {
     expect(result.receipt.status).toBe("pending");
   });
 
-  it("scopes request reads to the authenticated requester", () => {
-    const result = submitBookingRequest(
+  it("scopes request reads to the authenticated requester", async () => {
+    const result = await submitBookingRequest(
       testDatabase.db,
       student,
       submission(),
@@ -368,22 +368,22 @@ describe("booking request service", () => {
     if (!result.ok) return;
 
     expect(
-      getMyBooking(testDatabase.db, student, result.receipt.id)?.id,
+      (await getMyBooking(testDatabase.db, student, result.receipt.id))?.id,
     ).toBe(result.receipt.id);
     expect(
-      getMyBooking(testDatabase.db, manager, result.receipt.id),
+      await getMyBooking(testDatabase.db, manager, result.receipt.id),
     ).toBeNull();
 
-    const studentList = listMyBookings(testDatabase.db, student);
-    const managerList = listMyBookings(testDatabase.db, manager);
+    const studentList = await listMyBookings(testDatabase.db, student);
+    const managerList = await listMyBookings(testDatabase.db, manager);
     expect(studentList.some((booking) => booking.id === result.receipt.id)).toBe(
       true,
     );
     expect(managerList).toEqual([]);
   });
 
-  it("lists a requester's bookings in ascending start-date order", () => {
-    const bookings = listMyBookings(testDatabase.db, student);
+  it("lists a requester's bookings in ascending start-date order", async () => {
+    const bookings = await listMyBookings(testDatabase.db, student);
     const startTimes = bookings.map((booking) => Date.parse(booking.startAt));
 
     expect(startTimes).toEqual([...startTimes].sort((left, right) => left - right));

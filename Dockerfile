@@ -16,8 +16,7 @@ RUN npm run build
 FROM base AS runner
 ENV NODE_ENV=production \
     PORT=3000 \
-    HOSTNAME=0.0.0.0 \
-    ROOMRELAY_DB_PATH=/app/data/room-relay.db
+    HOSTNAME=0.0.0.0
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
@@ -29,7 +28,7 @@ COPY --from=builder /app/db ./db
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/scripts ./scripts
 
-RUN mkdir -p /app/data && chown -R node:node /app
+RUN chown -R node:node /app
 USER node
 
 EXPOSE 3000

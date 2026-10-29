@@ -23,9 +23,9 @@ export async function openNotificationAction(formData: FormData): Promise<void> 
   let destination = "/app/notifications";
 
   if (typeof id === "string") {
-    markNotificationRead(db, profile, id);
+    await markNotificationRead(db, profile, id);
     // Resolve the link from the stored notification, never from the form.
-    const item = listNotifications(db, profile, { limit: 200 }).find(
+    const item = (await listNotifications(db, profile, { limit: 200 })).find(
       (notification) => notification.id === id,
     );
     if (item?.linkPath) {
@@ -44,7 +44,7 @@ export async function markAllReadAction(): Promise<void> {
     redirect("/login?next=/app/notifications");
   }
 
-  markAllNotificationsRead(getDatabase(), profile);
+  await markAllNotificationsRead(getDatabase(), profile);
   revalidatePath("/app", "layout");
   redirect("/app/notifications");
 }

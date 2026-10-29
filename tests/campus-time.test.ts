@@ -10,7 +10,7 @@ import {
 const TIMEZONE = "Europe/London";
 
 describe("campus-local time conversion", () => {
-  it("converts a winter local interval to UTC", () => {
+  it("converts a winter local interval to UTC", async () => {
     const result = parseCampusInterval(
       "2026-10-29",
       "10:00",
@@ -27,7 +27,7 @@ describe("campus-local time conversion", () => {
     }
   });
 
-  it("accounts for British Summer Time", () => {
+  it("accounts for British Summer Time", async () => {
     const result = parseCampusInterval(
       "2026-07-15",
       "10:00",
@@ -42,7 +42,7 @@ describe("campus-local time conversion", () => {
     }
   });
 
-  it("rejects a nonexistent local time in the spring DST gap", () => {
+  it("rejects a nonexistent local time in the spring DST gap", async () => {
     const result = parseCampusInterval(
       "2027-03-28",
       "01:30",
@@ -56,7 +56,7 @@ describe("campus-local time conversion", () => {
     }
   });
 
-  it("rejects an ambiguous local time during the autumn fold", () => {
+  it("rejects an ambiguous local time during the autumn fold", async () => {
     const result = parseCampusInterval(
       "2026-10-25",
       "01:30",
@@ -70,7 +70,7 @@ describe("campus-local time conversion", () => {
     }
   });
 
-  it("rejects intervals where the end is not after the start", () => {
+  it("rejects intervals where the end is not after the start", async () => {
     const same = parseCampusInterval(
       "2026-10-29",
       "10:00",
@@ -90,7 +90,7 @@ describe("campus-local time conversion", () => {
     if (!reversed.ok) expect(reversed.code).toBe("end_before_start");
   });
 
-  it("rejects malformed dates and times", () => {
+  it("rejects malformed dates and times", async () => {
     expect(parseCampusInterval("not-a-date", "10:00", "11:00", TIMEZONE).ok).toBe(
       false,
     );
@@ -102,7 +102,7 @@ describe("campus-local time conversion", () => {
     );
   });
 
-  it("formats dates and times in the configured campus timezone", () => {
+  it("formats dates and times in the configured campus timezone", async () => {
     expect(formatCampusDate("2026-07-15T09:00:00Z", TIMEZONE)).toContain("15 Jul 2026");
     expect(
       formatCampusTimeRange(
@@ -113,7 +113,7 @@ describe("campus-local time conversion", () => {
     ).toBe("10:00–11:30");
   });
 
-  it("supports deterministic local date helpers", () => {
+  it("supports deterministic local date helpers", async () => {
     expect(addDaysToLocalDate("2026-10-29", 3)).toBe("2026-11-01");
     expect(localDateWeekday("2026-10-29")).toBe(4);
     expect(localDateWeekday("2026-11-01")).toBe(0);

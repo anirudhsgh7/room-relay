@@ -72,11 +72,11 @@ const cancellationSchema = z.object({
     .max(500, "Keep the cancellation reason under 500 characters."),
 });
 
-function loadBooking(
+async function loadBooking(
   db: RoomRelayDatabase,
   bookingId: string,
-): CancellationBookingRow | null {
-  const row = db
+): Promise<CancellationBookingRow | null> {
+  const row = (await db
     .prepare(
       `SELECT
          b.id, b.room_id, b.requester_id, b.start_at, b.end_at, b.status,
@@ -87,16 +87,16 @@ function loadBooking(
        JOIN profiles requester ON requester.id = b.requester_id
        WHERE b.id = ?`,
     )
-    .get(bookingId) as CancellationBookingRow | undefined;
+    .get(bookingId)) as CancellationBookingRow | undefined;
 
   return row ?? null;
 }
 
-export function cancelOwnBooking(
+export async function cancelOwnBooking(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: { bookingId: string; reason: string },
-): CancellationResult {
+): Promise<CancellationResult> {
   const parsed = cancellationSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -114,8 +114,8 @@ export function cancelOwnBooking(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): CancellationResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<CancellationResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (!freshActor) {
         return {
@@ -125,7 +125,7 @@ export function cancelOwnBooking(
         };
       }
 
-      const booking = loadBooking(db, parsed.data.bookingId);
+      const booking = await loadBooking(db, parsed.data.bookingId);
 
       if (!booking || booking.requester_id !== freshActor.id) {
         return {
@@ -163,7 +163,7 @@ export function cancelOwnBooking(
 
       const nowIso = new Date().toISOString();
       const priorStatus = booking.status;
-      const update = db
+      const update = await db
         .prepare(
           `UPDATE bookings
            SET status = 'cancelled',
@@ -186,7 +186,7 @@ export function cancelOwnBooking(
         });
 
       if (update.changes !== 1) {
-        const current = loadBooking(db, booking.id);
+        const current = await loadBooking(db, booking.id);
         return {
           ok: false,
           kind: "state_changed",
@@ -195,7 +195,7 @@ export function cancelOwnBooking(
         };
       }
 
-      db.prepare(
+      await db.prepare(
         `INSERT INTO audit_events (
            id, actor_id, action, entity_type, entity_id, occurred_at,
            summary, correlation_id, metadata_json
@@ -223,10 +223,10 @@ export function cancelOwnBooking(
       let promotedCount = 0;
 
       if (priorStatus === "approved") {
-        const managerId = activeRoomManagerId(db, booking.room_id);
+        const managerId = await activeRoomManagerId(db, booking.room_id);
 
         if (managerId) {
-          createNotification(db, {
+          await createNotification(db, {
             recipientId: managerId,
             kind: "booking_cancelled",
             title: `Booking cancelled: ${booking.room_name}`,
@@ -240,14 +240,14 @@ export function cancelOwnBooking(
           });
         }
 
-        promotedCount = promoteWaitlist(db, {
+        promotedCount = (await promoteWaitlist(db, {
           roomId: booking.room_id,
           freedStartAt: booking.start_at,
           freedEndAt: booking.end_at,
           nowIso,
           correlationId,
           cause: "the booking holding it was cancelled",
-        }).length;
+        })).length;
       }
 
       return {
@@ -264,7 +264,7 @@ export function cancelOwnBooking(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
 
@@ -294,7 +294,7 @@ export function cancelOwnBooking(
  * Returns the prior status, or null if the booking was not in a cancellable
  * state when the update ran.
  */
-export function cancelAsStaffInTransaction(
+export async function cancelAsStaffInTransaction(
   db: RoomRelayDatabase,
   input: {
     actor: UserProfile;
@@ -305,8 +305,8 @@ export function cancelAsStaffInTransaction(
     /** When false, the freed slot is not offered to the waitlist (closures). */
     releaseToWaitlist: boolean;
   },
-): { priorStatus: BookingStatus; promotedCount: number } | null {
-  const booking = loadBooking(db, input.bookingId);
+): Promise<{ priorStatus: BookingStatus; promotedCount: number } | null> {
+  const booking = await loadBooking(db, input.bookingId);
 
   if (
     !booking ||
@@ -320,7 +320,7 @@ export function cancelAsStaffInTransaction(
   }
 
   const priorStatus = booking.status;
-  const update = db
+  const update = await db
     .prepare(
       `UPDATE bookings
        SET status = 'cancelled',
@@ -342,7 +342,7 @@ export function cancelAsStaffInTransaction(
     return null;
   }
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO audit_events (
        id, actor_id, action, entity_type, entity_id, occurred_at,
        summary, correlation_id, metadata_json
@@ -365,7 +365,7 @@ export function cancelAsStaffInTransaction(
     }),
   });
 
-  createNotification(db, {
+  await createNotification(db, {
     recipientId: booking.requester_id,
     kind: "booking_cancelled_by_staff",
     title:
@@ -389,14 +389,14 @@ export function cancelAsStaffInTransaction(
   let promotedCount = 0;
 
   if (priorStatus === "approved" && input.releaseToWaitlist) {
-    promotedCount = promoteWaitlist(db, {
+    promotedCount = (await promoteWaitlist(db, {
       roomId: booking.room_id,
       freedStartAt: booking.start_at,
       freedEndAt: booking.end_at,
       nowIso: input.nowIso,
       correlationId: input.correlationId,
       cause: "staff cancelled the booking holding it",
-    }).length;
+    })).length;
   }
 
   return { priorStatus, promotedCount };
@@ -412,11 +412,11 @@ const staffCancellationSchema = z.object({
 });
 
 /** A room manager or administrator cancels one booking with a stated reason. */
-export function cancelBookingAsStaff(
+export async function cancelBookingAsStaff(
   db: RoomRelayDatabase,
   actor: UserProfile,
   input: { bookingId: string; reason: string },
-): CancellationResult {
+): Promise<CancellationResult> {
   const parsed = staffCancellationSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -431,8 +431,8 @@ export function cancelBookingAsStaff(
   const correlationId = randomUUID();
 
   try {
-    const execute = db.transaction((): CancellationResult => {
-      const freshActor = getProfileById(db, actor.id);
+    const execute = db.transaction(async (): Promise<CancellationResult> => {
+      const freshActor = await getProfileById(db, actor.id);
 
       if (
         !freshActor ||
@@ -446,7 +446,7 @@ export function cancelBookingAsStaff(
         };
       }
 
-      const booking = loadBooking(db, parsed.data.bookingId);
+      const booking = await loadBooking(db, parsed.data.bookingId);
 
       if (
         !booking ||
@@ -476,7 +476,7 @@ export function cancelBookingAsStaff(
       }
 
       const nowIso = new Date().toISOString();
-      const result = cancelAsStaffInTransaction(db, {
+      const result = await cancelAsStaffInTransaction(db, {
         actor: freshActor,
         bookingId: booking.id,
         reason: parsed.data.reason,
@@ -486,7 +486,7 @@ export function cancelBookingAsStaff(
       });
 
       if (!result) {
-        const current = loadBooking(db, booking.id);
+        const current = await loadBooking(db, booking.id);
         return {
           ok: false,
           kind: "state_changed",
@@ -509,7 +509,7 @@ export function cancelBookingAsStaff(
       };
     });
 
-    return execute.immediate();
+    return await execute.immediate();
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown error";
     console.error("Staff cancellation failed:", correlationId, message);

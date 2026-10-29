@@ -41,13 +41,13 @@ export default async function IncidentDetailPage({
   const { id } = await params;
   const query = await searchParams;
   const db = getDatabase();
-  const incident = getIncidentDetail(db, profile, id);
+  const incident = await getIncidentDetail(db, profile, id);
 
   if (!incident) {
     notFound();
   }
 
-  const timeline = getBookingTimeline(db, profile, incident.bookingId);
+  const timeline = await getBookingTimeline(db, profile, incident.bookingId);
   const timezone = getCampusTimezone();
   const requestedBookingHref =
     profile.role === "student"

@@ -102,45 +102,42 @@ function toItem(row: NotificationRow): NotificationItem {
  * state change it describes so a notification never exists for a change that
  * rolled back. Returns false when the dedupe key was already delivered.
  */
-export function createNotification(
+export async function createNotification(
   db: RoomRelayDatabase,
   input: NotificationInput,
-): boolean {
+): Promise<boolean> {
   const linkPath =
     input.linkPath && input.linkPath.startsWith("/app") ? input.linkPath : null;
-  const result = db
+  const result = await db
     .prepare(
       `INSERT INTO notifications (
          id, recipient_id, kind, title, body, link_path, booking_id,
          dedupe_key, created_at, read_at
-       ) VALUES (
-         @id, @recipient_id, @kind, @title, @body, @link_path, @booking_id,
-         @dedupe_key, @created_at, NULL
-       )
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
        ON CONFLICT DO NOTHING`,
     )
-    .run({
-      id: `ntf_${randomUUID()}`,
-      recipient_id: input.recipientId,
-      kind: input.kind,
-      title: input.title.trim(),
-      body: input.body.trim(),
-      link_path: linkPath,
-      booking_id: input.bookingId ?? null,
-      dedupe_key: input.dedupeKey ?? null,
-      created_at: input.createdAt ?? new Date().toISOString(),
-    });
+    .run([
+      `ntf_${randomUUID()}`,
+      input.recipientId,
+      input.kind,
+      input.title.trim(),
+      input.body.trim(),
+      linkPath,
+      input.bookingId ?? null,
+      input.dedupeKey ?? null,
+      input.createdAt ?? new Date().toISOString(),
+    ]);
 
   return result.changes === 1;
 }
 
-export function listNotifications(
+export async function listNotifications(
   db: RoomRelayDatabase,
   profile: UserProfile,
   options: { limit?: number; unreadOnly?: boolean } = {},
-): NotificationItem[] {
+): Promise<NotificationItem[]> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-  const rows = db
+  const rows = (await db
     .prepare(
       `SELECT id, kind, title, body, link_path, booking_id, created_at, read_at
        FROM notifications
@@ -149,71 +146,69 @@ export function listNotifications(
        ORDER BY created_at DESC, id DESC
        LIMIT ?`,
     )
-    .all(profile.id, limit) as NotificationRow[];
+    .all([profile.id, limit])) as NotificationRow[];
 
   return rows.map(toItem);
 }
 
-export function countUnreadNotifications(
+export async function countUnreadNotifications(
   db: RoomRelayDatabase,
   profileId: string,
-): number {
-  const row = db
+): Promise<number> {
+  const row = (await db
     .prepare(
-      `SELECT count(*) AS count
-       FROM notifications
-       WHERE recipient_id = ? AND read_at IS NULL`,
+      "SELECT count(*) AS count FROM notifications WHERE recipient_id = ? AND read_at IS NULL",
     )
-    .get(profileId) as { count: number };
+    .get(profileId)) as { count: number };
 
   return row.count;
 }
 
 /** Marks one of the actor's own notifications as read. */
-export function markNotificationRead(
+export async function markNotificationRead(
   db: RoomRelayDatabase,
   profile: UserProfile,
   notificationId: string,
-): boolean {
-  const result = db
+): Promise<boolean> {
+  const result = await db
     .prepare(
       `UPDATE notifications
        SET read_at = ?
        WHERE id = ? AND recipient_id = ? AND read_at IS NULL`,
     )
-    .run(new Date().toISOString(), notificationId, profile.id);
+    .run([new Date().toISOString(), notificationId, profile.id]);
 
   return result.changes === 1;
 }
 
-export function markAllNotificationsRead(
+export async function markAllNotificationsRead(
   db: RoomRelayDatabase,
   profile: UserProfile,
-): number {
-  const result = db
+): Promise<number> {
+  const result = await db
     .prepare(
       `UPDATE notifications
        SET read_at = ?
        WHERE recipient_id = ? AND read_at IS NULL`,
     )
-    .run(new Date().toISOString(), profile.id);
+    .run([new Date().toISOString(), profile.id]);
 
   return result.changes;
 }
 
 /** The active manager assigned to a room, or null if the room has none. */
-export function activeRoomManagerId(
+export async function activeRoomManagerId(
   db: RoomRelayDatabase,
   roomId: string,
-): string | null {
-  const row = db
+): Promise<string | null> {
+  const row = (await db
     .prepare(
       `SELECT p.id
        FROM rooms r
        JOIN profiles p ON p.id = r.manager_id
        WHERE r.id = ? AND p.status = 'active'`,
     )
-    .get(roomId) as { id: string } | undefined;
+    .get(roomId)) as { id: string } | undefined;
 
   return row?.id ?? null;
 }

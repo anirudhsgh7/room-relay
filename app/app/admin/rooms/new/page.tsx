@@ -17,7 +17,7 @@ export default async function NewRoomPage() {
     notFound();
   }
 
-  const managers = listAssignableManagers(getDatabase());
+  const managers = await listAssignableManagers(getDatabase());
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">

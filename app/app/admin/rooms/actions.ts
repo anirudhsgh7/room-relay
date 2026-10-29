@@ -95,7 +95,7 @@ export async function createRoomAction(
 ): Promise<AdminFormState> {
   const profile = await requireStaff();
   const values = detailValues(formData);
-  const result = createRoom(getDatabase(), profile, {
+  const result = await createRoom(getDatabase(), profile, {
     code: values.code,
     name: values.name!,
     building: values.building!,
@@ -121,7 +121,7 @@ export async function updateDetailsAction(
   const profile = await requireStaff();
   const roomId = text(formData, "roomId");
   const values = detailValues(formData);
-  const result = updateRoomDetails(getDatabase(), profile, roomId, {
+  const result = await updateRoomDetails(getDatabase(), profile, roomId, {
     name: values.name!,
     building: values.building!,
     location: values.location!,
@@ -176,7 +176,7 @@ export async function updateHoursAction(
       [`closes_${day.weekday}`, day.closesAt],
     ]),
   );
-  const result = updateRoomHours(getDatabase(), profile, roomId, days);
+  const result = await updateRoomHours(getDatabase(), profile, roomId, days);
 
   if (!result.ok) {
     return failure(result, values);
@@ -218,7 +218,7 @@ export async function updatePolicyAction(
     requestsEnabled: checked(formData, "requestsEnabled") ? "on" : "",
     waitlistEnabled: checked(formData, "waitlistEnabled") ? "on" : "",
   };
-  const result = updateRoomPolicy(getDatabase(), profile, roomId, {
+  const result = await updateRoomPolicy(getDatabase(), profile, roomId, {
     requestsEnabled: values.requestsEnabled === "on",
     waitlistEnabled: values.waitlistEnabled === "on",
     slotIntervalMinutes: values.slotIntervalMinutes!,
@@ -252,7 +252,7 @@ export async function addBlackoutAction(
     allDay: checked(formData, "allDay") ? "on" : "",
     reason: text(formData, "reason"),
   };
-  const result = addBlackout(getDatabase(), profile, roomId, {
+  const result = await addBlackout(getDatabase(), profile, roomId, {
     startDate: values.startDate,
     endDate: values.endDate || values.startDate,
     allDay: values.allDay === "on",
@@ -281,7 +281,7 @@ export async function addBlackoutAction(
 export async function removeBlackoutAction(formData: FormData): Promise<void> {
   const profile = await requireStaff();
   const roomId = text(formData, "roomId");
-  removeBlackout(getDatabase(), profile, roomId, text(formData, "blackoutId"));
+  await removeBlackout(getDatabase(), profile, roomId, text(formData, "blackoutId"));
   refresh(roomId);
   redirect(`/app/admin/rooms/${roomId}?reopened=1#closures`);
 }

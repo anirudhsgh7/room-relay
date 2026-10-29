@@ -41,7 +41,8 @@ This repository implements **Phase 6: operations and usability** on top of the c
 | Requester check-out with required condition report | Complete |
 | Incident reporting, manager review, admin resolution | Complete |
 | Connected request-to-close-out lifecycle timeline | Complete |
-| Public preview deployment | Requires a hosting provider and URL |
+| Neon Postgres + Vercel deployment configuration | Complete |
+| Public preview deployment | Not provisioned — requires Vercel project and domain |
 
 ### What is deliberately not included
 
@@ -63,15 +64,27 @@ The application labels these areas as future phases rather than presenting nonfu
 
 - Node.js **22.12 or newer** (verified with Node 24)
 - npm **10 or newer**
+- A Neon account and project
 
-Docker is optional and only needed for container deployment.
+Docker is optional and only needed for a container deployment.
+
+Link a Neon project and pull its connection strings into `.env.local`:
+
+```bash
+npx neon@latest init -y --org-id <org-id> --project-id <project-id> --branch production --services postgres
+npx neon@latest deploy
+```
+
+`neon deploy` writes `DATABASE_URL` and `DATABASE_URL_UNPOOLED` into `.env.local`. It also reads the service declaration in `neon.ts`.
+
+Then install and start:
 
 ```bash
 npm install
 npm run dev
 ```
 
-The `predev` hook creates a local `.env.local` with a random development session secret, applies migrations, and seeds the demo dataset. Open [http://localhost:3000](http://localhost:3000).
+The `predev` hook applies the Postgres migrations and seeds the demo dataset. Open [http://localhost:3000](http://localhost:3000).
 
 If you prefer explicit setup:
 
@@ -80,7 +93,7 @@ npm run db:setup
 npm run dev
 ```
 
-The database is stored at `data/room-relay.db` by default and is ignored by Git.
+The database is Neon Postgres, configured by `DATABASE_URL`. The direct URL in `DATABASE_URL_UNPOOLED` is used for migrations, seeds, and backups.
 
 ### Demo accounts
 
@@ -137,7 +150,7 @@ The suspended account is not shown in the login directory. A second active stude
 23. Request `/app`, `/app/manager/queue`, `/app/access`, or `/app/incidents` in a private window. Anonymous access is denied.
 24. Try the suspended account. Authentication fails after password verification.
 
-The app has no browser-facing database API, so SQLite cannot be queried directly from the client even if the UI is bypassed.
+The app has no browser-facing database API, so Postgres cannot be queried directly from the client even if the UI is bypassed.
 
 ## Phase 6 walkthrough
 
@@ -153,7 +166,7 @@ The app has no browser-facing database API, so SQLite cannot be queried directly
 - **Changeover buffer is symmetric.** Migration 006 fixes an order-dependent bug: the buffer was only enforced after whichever booking was approved first. Every confirmed booking now occupies `[start, end + buffer)`.
 - **Raising the buffer is refused** if it would make already-approved bookings collide.
 - **Closures and room closing** show the affected bookings first; confirming cancels them and tells each person why. Bookings in use are never interrupted.
-- **Setup no longer overwrites admin edits.** `db:setup` (run by `npm start`) only seeds rooms that do not exist yet, and skips existing booking fixtures (SQLite runs insert triggers even for rows `ON CONFLICT DO NOTHING` would skip).
+- **Setup no longer overwrites admin edits.** `db:setup` (run locally by `npm start`) only seeds rooms that do not exist yet, and skips existing booking fixtures. Postgres runs insert triggers even for rows `ON CONFLICT DO NOTHING` would skip, so existing fixtures are checked up front.
 
 ## Commands
 
@@ -173,7 +186,7 @@ The app has no browser-facing database API, so SQLite cannot be queried directly
 | `npm run db:reset` | Delete the local database and recreate it with fresh relative demo dates |
 | `npm run check` | Run lint, type-check, tests, and production build |
 
-Use `npm run db:reset` when the seeded relative booking dates become stale. The reset script refuses to run against `NODE_ENV=production` unless `ROOMRELAY_ALLOW_DB_RESET=1` is explicitly set.
+Use `npm run db:reset` when the seeded relative booking dates become stale. The reset script requires `ROOMRELAY_ALLOW_DB_RESET=1` and drops the public Postgres schema, so only run it against a disposable database.
 
 ## Architecture
 
@@ -201,32 +214,26 @@ Next.js application (server runtime)
   ├─ lib/incidents/queries.ts      scoped incident queue/detail
   ├─ lib/time/campus-time.ts       timezone/DST-aware local↔UTC conversion
   ├─ lib/db/queries.ts             dashboard projections
-  └─ lib/db/client.ts              server-only better-sqlite3 access
-                                     │
-                                     ▼
-                              data/room-relay.db
+  └─ lib/db/client.ts              server-only Postgres pool and transactions
+                                      │
+                                      ▼
+                              Neon Postgres (DATABASE_URL)
 ```
 
 ### Stack
 
 - **Next.js 16 / React 19 / TypeScript**
 - **Tailwind CSS 4** with a custom campus-operations visual system
-- **SQLite** through `better-sqlite3`, accessed only in the Node server runtime
+- **Postgres on Neon** through the server-only `pg` pool
 - **scrypt** password hashing with per-password random salts
 - **jose** HS256 session tokens in an HTTP-only cookie
 - **Temporal polyfill** for timezone/DST-safe local-time conversion
 - **Zod** server-side form validation
 - **Vitest** database, authentication, authorization, discovery, booking, timezone, redirect, and rate-limit tests
 
-### Foundation-stack decision
+### Database-stack decision
 
-The recommended product stack in `docs/plan.md` is Supabase Auth plus PostgreSQL. This implementation instead uses a self-contained SQLite database and explicit server-side authentication because:
-
-1. No Supabase project credentials or Docker daemon were available in the implementation environment.
-2. Phase 1 must be immediately runnable by a reviewer without an external account or network service.
-3. The database is never exposed to the browser, so there is no client-side database API that requires row-level security policies.
-
-This does **not** claim SQLite is the final production datastore. The equivalent trust controls are:
+The application now uses Neon Postgres so the Next.js app can run on Vercel without a persistent local filesystem. The runtime connection is pooled; migrations and backups use the direct URL. The database remains server-only:
 
 - no browser-reachable database client;
 - all reads through narrow server-side query functions;
@@ -235,7 +242,7 @@ This does **not** claim SQLite is the final production datastore. The equivalent
 - append-only triggers on access and audit history;
 - server-side credential verification and generic sign-in errors.
 
-Before a multi-instance or production deployment, migrate the repository layer to PostgreSQL, add database RLS as defense in depth, replace the in-memory rate limiter with a shared store, and move from demo passwords to managed institutional identity.
+Before a multi-instance production deployment, add a shared rate-limit store, move from demo passwords to managed institutional identity, and review the remaining security limitations below.
 
 ### Why two managers?
 
@@ -243,7 +250,7 @@ The two manager accounts have disjoint room portfolios. That makes room-scoped a
 
 ## Data model
 
-The migrations under `db/migrations/` define the Phase 1 lifecycle and the Phase 2 request foundation:
+The migrations under `db/postgres/` define the Postgres lifecycle schema:
 
 - `profiles` — display identity, persisted role, account status, password hash
 - `rooms` — code, building, location, capacity, facilities, policy, manager ownership
@@ -307,7 +314,7 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
 - Form input is validated on the server with Zod.
 - Room IDs, requester IDs, statuses, decision fields, eligibility status, and timestamps are resolved or set by trusted server code.
 - Room search errors never expose another requester's name, group, purpose, or booking ID.
-- Request creation re-reads the profile, room policy, hours, eligibility, and confirmed conflicts inside an immediate SQLite write transaction.
+- Request creation re-reads the profile, room policy, hours, eligibility, and confirmed conflicts inside an immediate Postgres transaction.
 - Request creation uses requester-scoped idempotency keys and a canonical payload hash to make retries safe.
 - Duplicate overlapping pending requests from the same user are rejected.
 - Room request attempts are rate-limited per active account.
@@ -326,7 +333,7 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
 - Incident manager review is scoped to assigned rooms; final resolution is admin-only.
 - Booking completion after incidents requires all linked incidents to be resolved.
 - Lifecycle timelines are assembled from authorized booking, access, condition, incident, and audit records.
-- The database file is server-only and ignored by Git.
+- The database is server-only; there is no browser-facing Postgres API.
 - Access and audit tables reject updates and deletes.
 - Confirmed booking overlap, decision metadata, cancellation metadata, access context, condition reports, incident review, and allowed transitions are guarded by database triggers.
 - Security headers are set for content sniffing, framing, referrer policy, and browser feature permissions.
@@ -339,7 +346,9 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
 - Pending requests intentionally do not reserve inventory; there is no waitlist or automatic allocation.
 - Manager/admin check-out on behalf of a requester, appeals, notifications, photo evidence, and automatic penalties are not implemented.
 - The access simulator does not support physical readers, device-authenticated controllers, anti-replay hardware protocols, offline grants, or live door control.
-- SQLite is a single-instance datastore and is not suitable for horizontally scaled serverless deployments without a persistent volume/migration.
+- SQLite is no longer used; Postgres is required for runtime, migrations, and tests.
+- The demo runs on a single Neon Free project; there is no high-availability or multi-region configuration.
+- Neon Free has a limited restore window and can suspend while idle. Use external dumps for anything you need to keep.
 - There is no real campus SSO, eligibility roster, NFC hardware, or door integration.
 - `script-src` is not yet restricted with a nonce-based Content Security Policy.
 
@@ -353,7 +362,7 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
   "service": "roomrelay",
   "phase": 6,
   "database": "ok",
-  "migrations": 6,
+  "migrations": 1,
   "checkedAt": "2026-10-28T06:01:07.556Z"
 }
 ```
@@ -361,6 +370,20 @@ Timestamps are stored as ISO-8601 UTC strings. The application reads `ROOMRELAY_
 It returns HTTP 503 with a safe reason if the database is uninitialized, the session secret is invalid, or the database cannot be reached.
 
 ## Testing
+
+```bash
+npm test
+```
+
+Tests run against a real Postgres database. Locally, the default is:
+
+```text
+postgresql://roomrelay:roomrelay_test@127.0.0.1:55432/roomrelay_test
+```
+
+Override it with `TEST_DATABASE_URL`. CI starts a disposable Postgres service automatically.
+
+Run the complete validation pipeline with:
 
 ```bash
 npm run check
@@ -396,43 +419,57 @@ The suite covers:
 - safe redirects that reject open-redirect payloads;
 - rate-limit windows and key isolation.
 
-The current suite contains 195 tests across 20 files, including allocation ranking, waitlist promotion, closures, room administration, reminders, notifications, and the assistant parser and answers.
+The current suite contains 202 tests across 22 files, including allocation ranking, waitlist promotion, closures, room administration, reminders, notifications, and the assistant parser and answers.
 
-`npm run test:smoke` additionally starts the production server and checks the live `/api/health` response, login page, anonymous redirects, room discovery, request and manager flows, the access simulator, access history scoping, requester incident pages, manager/admin incident routes, anonymous API rejection, and simulation notices over HTTP. It uses port `3107` and requires a production build plus an initialized database.
+`npm run test:smoke` additionally starts the production server and checks the live `/api/health` response, login page, anonymous redirects, room discovery, request and manager flows, the access simulator, access history scoping, requester incident pages, manager/admin incident routes, anonymous API rejection, and simulation notices over HTTP. It uses port `3107` and requires a production build plus a seeded Postgres database.
+
 
 ## Deployment
 
-A public preview has not been provisioned because no hosting-provider credentials were supplied. The GitHub Actions workflow validates the application. The included Docker configuration is ready for a single-instance deployment with persistent storage.
+This repository is configured for **Vercel + Neon Postgres**. Vercel hosts the Next.js app, Server Actions, and route handlers together; Neon supplies the database. There is no persistent container disk to manage.
+
+### Neon setup
+
+1. Create or link a Neon project.
+2. Link it locally with `neon init` or `neon link`.
+3. Run `neon deploy` to create the declared Postgres service and pull the connection strings.
+4. Apply the schema with `npm run db:migrate`.
+5. Seed the demo data with `npm run db:seed` if this is a demo environment.
+
+### Vercel setup
+
+1. Import the repository into Vercel.
+2. Add the environment variables from `.env.example`.
+3. Use the pooled URL for `DATABASE_URL`.
+4. Use the direct URL for `DATABASE_URL_UNPOOLED`.
+5. Set `ROOMRELAY_SESSION_SECRET` and `ROOMRELAY_CAMPUS_TIMEZONE`.
+6. Deploy the Next.js project.
+
+The production build does not run migrations. Apply migrations as a controlled deploy step; do not run them on every request.
 
 ### Docker Compose
 
-Generate a real session secret first:
+Generate a real session secret and provide the Neon URLs:
 
 ```bash
 export ROOMRELAY_SESSION_SECRET="$(node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))")"
+export DATABASE_URL="postgresql://..."
+export DATABASE_URL_UNPOOLED="postgresql://..."
 docker compose up --build
 ```
 
-The app is available at `http://localhost:3000`. Demo data lives in the named `roomrelay-data` volume. The container runs migrations and the idempotent seed before starting Next.js.
-
-For a public deployment:
-
-1. Deploy the image to a host that supports a persistent volume, or migrate the data layer to PostgreSQL first.
-2. Provide `ROOMRELAY_SESSION_SECRET` as a runtime secret.
-3. Set `ROOMRELAY_CAMPUS_TIMEZONE` to the institution's IANA timezone.
-4. Mount `/app/data` on persistent storage.
-5. Set `ROOMRELAY_DB_PATH` if the volume uses a different path.
-6. Verify `/api/health` before sharing the URL.
+The app runs at `http://localhost:3000`. The container applies migrations and the idempotent demo seed before starting Next.js.
 
 ### Environment variables
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
 | `ROOMRELAY_SESSION_SECRET` | Yes | — | 32+ characters; do not reuse the demo value |
-| `ROOMRELAY_DB_PATH` | No | `./data/room-relay.db` | Absolute path or path relative to app root |
+| `DATABASE_URL` | Yes | — | Neon pooled Postgres connection |
+| `DATABASE_URL_UNPOOLED` | Yes | — | Neon direct connection for migrations, seeds, and dumps |
 | `ROOMRELAY_CAMPUS_TIMEZONE` | No | `Europe/London` | Must be a valid IANA timezone |
 
-See `.env.example`. Never commit `.env.local` or a populated database.
+See `.env.example`. Never commit `.env.local`. Use the direct Neon URL for `pg_dump` and restore operations.
 
 ## Project documents
 

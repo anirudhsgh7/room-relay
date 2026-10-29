@@ -1,29 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getProfileById } from "@/lib/auth/service";
+import type { UserProfile } from "@/lib/auth/service";
 import { simulateAccessCheck } from "@/lib/access/service";
 import { checkOutBooking } from "@/lib/bookings/checkout";
 import { clearRateLimitsForTests } from "@/lib/rate-limit";
-import { createSeededTestDatabase } from "./helpers";
+import { createSeededTestDatabase, getTestProfile } from "./helpers";
 
 type SeededTestDatabase = Awaited<ReturnType<typeof createSeededTestDatabase>>;
 
 const fixedNow = new Date("2026-10-28T12:00:00.000Z");
 
-function tableCount(
+async function tableCount(
   testDatabase: SeededTestDatabase,
   table: "condition_reports" | "incidents" | "audit_events",
-): number {
+): Promise<number> {
   return (
-    testDatabase.db
+    (await testDatabase.db
       .prepare(`SELECT count(*) AS count FROM ${table}`)
-      .get() as { count: number }
+      .get()) as { count: number }
   ).count;
 }
 
-function checkInActiveBooking(testDatabase: SeededTestDatabase): void {
-  const student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-  const result = simulateAccessCheck(testDatabase.db, student, {
+async function checkInActiveBooking(testDatabase: SeededTestDatabase): Promise<void> {
+  const student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+  const result = await simulateAccessCheck(testDatabase.db, student, {
     credentialId: "cred_amelia_active",
     roomId: "room_classroom_14",
     eventNonce: randomUUID(),
@@ -36,16 +36,16 @@ function checkInActiveBooking(testDatabase: SeededTestDatabase): void {
 
 describe("requester check-out and condition reports", () => {
   let testDatabase: SeededTestDatabase;
-  let student: NonNullable<ReturnType<typeof getProfileById>>;
-  let otherStudent: NonNullable<ReturnType<typeof getProfileById>>;
+  let student: UserProfile;
+  let otherStudent: UserProfile;
 
   beforeEach(async () => {
     testDatabase = await createSeededTestDatabase(fixedNow);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
     clearRateLimitsForTests();
-    student = getProfileById(testDatabase.db, "usr_amelia_chen")!;
-    otherStudent = getProfileById(testDatabase.db, "usr_noah_williams")!;
+    student = await getTestProfile(testDatabase.db, "usr_amelia_chen");
+    otherStudent = await getTestProfile(testDatabase.db, "usr_noah_williams");
   });
 
   afterEach(() => {
@@ -54,12 +54,12 @@ describe("requester check-out and condition reports", () => {
     testDatabase.cleanup();
   });
 
-  it("completes a clean checked-in booking with an after report", () => {
-    checkInActiveBooking(testDatabase);
-    const beforeConditions = tableCount(testDatabase, "condition_reports");
-    const beforeAudit = tableCount(testDatabase, "audit_events");
+  it("completes a clean checked-in booking with an after report", async () => {
+    await checkInActiveBooking(testDatabase);
+    const beforeConditions = await tableCount(testDatabase, "condition_reports");
+    const beforeAudit = await tableCount(testDatabase, "audit_events");
 
-    const result = checkOutBooking(testDatabase.db, student, {
+    const result = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "left_as_found",
       notes: "Room left as found. Chairs reset and projector off.",
@@ -69,12 +69,12 @@ describe("requester check-out and condition reports", () => {
       ok: true,
       receipt: { status: "completed" },
     });
-    expect(tableCount(testDatabase, "condition_reports")).toBe(
+    expect(await tableCount(testDatabase, "condition_reports")).toBe(
       beforeConditions + 1,
     );
-    expect(tableCount(testDatabase, "audit_events")).toBe(beforeAudit + 2);
+    expect(await tableCount(testDatabase, "audit_events")).toBe(beforeAudit + 2);
 
-    const row = testDatabase.db
+    const row = await testDatabase.db
       .prepare(
         `SELECT status, checked_out_at, closed_at, closure_reason
          FROM bookings WHERE id = 'booking_demo_active_classroom'`,
@@ -91,7 +91,7 @@ describe("requester check-out and condition reports", () => {
     expect(row.closed_at).toBeTruthy();
     expect(row.closure_reason).toBe("left_as_found");
 
-    const report = testDatabase.db
+    const report = await testDatabase.db
       .prepare(
         `SELECT stage, condition_state, notes
          FROM condition_reports
@@ -103,11 +103,11 @@ describe("requester check-out and condition reports", () => {
     expect(report.notes).toContain("Chairs reset");
   });
 
-  it("creates an open incident for an issue check-out", () => {
-    checkInActiveBooking(testDatabase);
-    const beforeIncidents = tableCount(testDatabase, "incidents");
+  it("creates an open incident for an issue check-out", async () => {
+    await checkInActiveBooking(testDatabase);
+    const beforeIncidents = await tableCount(testDatabase, "incidents");
 
-    const result = checkOutBooking(testDatabase.db, student, {
+    const result = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "issue_found",
       notes: "The room was usable but a chair was damaged.",
@@ -120,9 +120,9 @@ describe("requester check-out and condition reports", () => {
       ok: true,
       receipt: { status: "incident" },
     });
-    expect(tableCount(testDatabase, "incidents")).toBe(beforeIncidents + 1);
+    expect(await tableCount(testDatabase, "incidents")).toBe(beforeIncidents + 1);
 
-    const booking = testDatabase.db
+    const booking = await testDatabase.db
       .prepare(
         "SELECT status, closed_at, closure_reason FROM bookings WHERE id = 'booking_demo_active_classroom'",
       )
@@ -137,7 +137,7 @@ describe("requester check-out and condition reports", () => {
       closure_reason: "issue_found",
     });
 
-    const incident = testDatabase.db
+    const incident = await testDatabase.db
       .prepare(
         `SELECT category, status, reporter_id, resolution_note
          FROM incidents
@@ -157,24 +157,24 @@ describe("requester check-out and condition reports", () => {
     });
   });
 
-  it("rejects checkout by a different requester", () => {
-    checkInActiveBooking(testDatabase);
-    const beforeConditions = tableCount(testDatabase, "condition_reports");
+  it("rejects checkout by a different requester", async () => {
+    await checkInActiveBooking(testDatabase);
+    const beforeConditions = await tableCount(testDatabase, "condition_reports");
 
-    const result = checkOutBooking(testDatabase.db, otherStudent, {
+    const result = await checkOutBooking(testDatabase.db, otherStudent, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "left_as_found",
       notes: "Trying to check out another user's booking.",
     });
 
     expect(result).toMatchObject({ ok: false, kind: "not_found" });
-    expect(tableCount(testDatabase, "condition_reports")).toBe(
+    expect(await tableCount(testDatabase, "condition_reports")).toBe(
       beforeConditions,
     );
   });
 
-  it("rejects checkout for a booking that is not checked in", () => {
-    const result = checkOutBooking(testDatabase.db, student, {
+  it("rejects checkout for a booking that is not checked in", async () => {
+    const result = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_pending_media",
       conditionState: "left_as_found",
       notes: "This pending request cannot be checked out.",
@@ -187,17 +187,17 @@ describe("requester check-out and condition reports", () => {
     });
   });
 
-  it("rejects a duplicate checkout after completion", () => {
-    checkInActiveBooking(testDatabase);
-    const first = checkOutBooking(testDatabase.db, student, {
+  it("rejects a duplicate checkout after completion", async () => {
+    await checkInActiveBooking(testDatabase);
+    const first = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "left_as_found",
       notes: "Room left as found after the demo.",
     });
     expect(first.ok).toBe(true);
-    const afterFirst = tableCount(testDatabase, "condition_reports");
+    const afterFirst = await tableCount(testDatabase, "condition_reports");
 
-    const second = checkOutBooking(testDatabase.db, student, {
+    const second = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "left_as_found",
       notes: "A duplicate check-out attempt.",
@@ -208,17 +208,17 @@ describe("requester check-out and condition reports", () => {
       kind: "not_checkable",
       currentStatus: "completed",
     });
-    expect(tableCount(testDatabase, "condition_reports")).toBe(afterFirst);
+    expect(await tableCount(testDatabase, "condition_reports")).toBe(afterFirst);
   });
 
-  it("requires valid condition and issue fields", () => {
-    checkInActiveBooking(testDatabase);
-    const missingNotes = checkOutBooking(testDatabase.db, student, {
+  it("requires valid condition and issue fields", async () => {
+    await checkInActiveBooking(testDatabase);
+    const missingNotes = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "left_as_found",
       notes: "no",
     });
-    const missingIssue = checkOutBooking(testDatabase.db, student, {
+    const missingIssue = await checkOutBooking(testDatabase.db, student, {
       bookingId: "booking_demo_active_classroom",
       conditionState: "issue_found",
       notes: "A valid condition note.",

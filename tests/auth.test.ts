@@ -71,12 +71,12 @@ describe("authentication", () => {
     ).resolves.toBeNull();
   });
 
-  it("does not resolve a suspended profile by ID", () => {
-    expect(getProfileById(testDatabase.db, "usr_jamie_cole")).toBeNull();
+  it("does not resolve a suspended profile by ID", async () => {
+    expect(await getProfileById(testDatabase.db, "usr_jamie_cole")).toBeNull();
   });
 
-  it("resolves an active profile by ID", () => {
-    expect(getProfileById(testDatabase.db, "usr_marcus_webb")).toMatchObject({
+  it("resolves an active profile by ID", async () => {
+    expect(await getProfileById(testDatabase.db, "usr_marcus_webb")).toMatchObject({
       role: "manager",
       status: "active",
     });

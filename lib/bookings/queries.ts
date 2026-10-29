@@ -171,35 +171,35 @@ const BOOKING_SELECT = `
   LEFT JOIN profiles cancel_actor ON cancel_actor.id = b.cancelled_by
 `;
 
-export function listMyBookings(
+export async function listMyBookings(
   db: RoomRelayDatabase,
   profile: UserProfile,
   limit = 50,
-): MyBooking[] {
-  const rows = db
+): Promise<MyBooking[]> {
+  const rows = (await db
     .prepare(
       `${BOOKING_SELECT}
        WHERE b.requester_id = ?
        ORDER BY b.start_at ASC, b.updated_at DESC, b.id ASC
        LIMIT ?`,
     )
-    .all(profile.id, Math.min(Math.max(limit, 1), 100)) as BookingRow[];
+    .all([profile.id, Math.min(Math.max(limit, 1), 100)])) as BookingRow[];
 
   return rows.map(mapBooking);
 }
 
-export function getMyBooking(
+export async function getMyBooking(
   db: RoomRelayDatabase,
   profile: UserProfile,
   bookingId: string,
-): MyBooking | null {
-  const row = db
+): Promise<MyBooking | null> {
+  const row = (await db
     .prepare(
       `${BOOKING_SELECT}
        WHERE b.id = ?
          AND b.requester_id = ?`,
     )
-    .get(bookingId, profile.id) as BookingRow | undefined;
+    .get([bookingId, profile.id])) as BookingRow | undefined;
 
   return row ? mapBooking(row) : null;
 }
